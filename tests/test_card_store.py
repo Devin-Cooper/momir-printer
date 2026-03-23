@@ -1,4 +1,3 @@
-import json
 import pytest
 from momir.card_store import CardStore
 

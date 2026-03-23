@@ -7,7 +7,7 @@ from pathlib import Path
 
 EXTRACTED_FIELDS = [
     "name", "manaValue", "type", "types", "power", "toughness",
-    "text", "manaCost", "supertypes", "subtypes", "isFunny",
+    "text", "manaCost", "supertypes", "subtypes",
 ]
 
 
