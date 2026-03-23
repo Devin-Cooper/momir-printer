@@ -1,12 +1,14 @@
 """FastAPI server — REST API for Momir Thermal Printer."""
 
 import asyncio
+import io
 from contextlib import asynccontextmanager
 from pathlib import Path
 from urllib.parse import quote
 
 from fastapi import FastAPI, HTTPException, Response
 from fastapi.responses import FileResponse
+from PIL import Image
 from pydantic import BaseModel
 
 from momir.card_store import CardStore
@@ -22,6 +24,7 @@ last_rolled_card: dict | None = None
 _settings = {
     "include_funny": False,
     "auto_print": False,
+    "print_art": True,
 }
 
 CARDS_JSON_PATH = str(Path.home() / "Downloads" / "AtomicCards.json")
@@ -52,6 +55,7 @@ class RollRequest(BaseModel):
 class SettingsUpdate(BaseModel):
     include_funny: bool | None = None
     auto_print: bool | None = None
+    print_art: bool | None = None
 
 
 @app.post("/roll")
@@ -87,7 +91,13 @@ async def print_card():
         raise HTTPException(status_code=400, detail="No card rolled yet")
     if printer.state == PrinterState.PRINTING:
         raise HTTPException(status_code=409, detail="Already printing")
-    img = render_card(last_rolled_card)
+    # Fetch art crop for the thermal print if enabled
+    art = None
+    if _settings["print_art"]:
+        art_bytes = await image_cache.get_image(last_rolled_card["name"], version="art_crop")
+        if art_bytes:
+            art = Image.open(io.BytesIO(art_bytes))
+    img = render_card(last_rolled_card, art_image=art)
     success = await printer.print_image(img)
     if not success:
         raise HTTPException(status_code=500, detail="Print failed — check printer connection")
@@ -116,6 +126,8 @@ async def update_settings(update: SettingsUpdate):
         _settings["include_funny"] = update.include_funny
     if update.auto_print is not None:
         _settings["auto_print"] = update.auto_print
+    if update.print_art is not None:
+        _settings["print_art"] = update.print_art
     return _settings.copy()
 
 

@@ -55,11 +55,19 @@ def _wrap_text(text: str, font: ImageFont.FreeTypeFont, max_width: int) -> list[
     return lines or [""]
 
 
-def render_card(card: dict) -> Image.Image:
-    name_font = _load_font(28, bold=True)
-    type_font = _load_font(20, bold=False)
-    text_font = _load_font(18, bold=False)
-    pt_font = _load_font(26, bold=True)
+def render_card(card: dict, art_image: Image.Image | None = None) -> Image.Image:
+    name_font = _load_font(36, bold=True)
+    type_font = _load_font(26, bold=False)
+    text_font = _load_font(24, bold=False)
+    pt_font = _load_font(34, bold=True)
+
+    # Prepare art if provided — scale to full width, convert to grayscale
+    art_height = 0
+    if art_image is not None:
+        art_image = art_image.convert("L")
+        art_ratio = art_image.height / art_image.width
+        art_image = art_image.resize((PRINT_WIDTH, int(PRINT_WIDTH * art_ratio)))
+        art_height = art_image.height
 
     y = PADDING
     name_str = card["name"]
@@ -67,6 +75,8 @@ def render_card(card: dict) -> Image.Image:
     name_height = name_font.getbbox("Ay")[3] - name_font.getbbox("Ay")[1]
     y += name_height + 8
     y += RULE_HEIGHT + 6
+    if art_height:
+        y += art_height + 6 + RULE_HEIGHT + 6
 
     type_str = card.get("type", "")
     type_height = type_font.getbbox("Ay")[3] - type_font.getbbox("Ay")[1]
@@ -111,6 +121,13 @@ def render_card(card: dict) -> Image.Image:
 
     draw.line([(PADDING, y), (PRINT_WIDTH - PADDING, y)], fill=0, width=RULE_HEIGHT)
     y += RULE_HEIGHT + 6
+
+    # Paste art after name line
+    if art_image is not None:
+        img.paste(art_image, (0, y))
+        y += art_height + 6
+        draw.line([(PADDING, y), (PRINT_WIDTH - PADDING, y)], fill=0, width=RULE_HEIGHT)
+        y += RULE_HEIGHT + 6
 
     draw.text((PADDING, y), type_str, font=type_font, fill=0)
     y += type_height + 6

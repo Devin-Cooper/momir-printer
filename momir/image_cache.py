@@ -25,11 +25,12 @@ class ImageCache:
         self._cache_dir = cache_dir
         os.makedirs(cache_dir, exist_ok=True)
 
-    def _cache_path(self, card_name: str) -> str:
-        return os.path.join(self._cache_dir, _sanitize_filename(card_name) + ".jpg")
+    def _cache_path(self, card_name: str, version: str = "normal") -> str:
+        suffix = f"_{version}" if version != "normal" else ""
+        return os.path.join(self._cache_dir, _sanitize_filename(card_name) + suffix + ".jpg")
 
-    async def get_image(self, card_name: str) -> bytes | None:
-        path = self._cache_path(card_name)
+    async def get_image(self, card_name: str, version: str = "normal") -> bytes | None:
+        path = self._cache_path(card_name, version)
 
         if os.path.exists(path):
             with open(path, "rb") as f:
@@ -39,7 +40,7 @@ class ImageCache:
             async with httpx.AsyncClient() as client:
                 resp = await client.get(
                     SCRYFALL_NAMED_URL,
-                    params={"exact": card_name, "format": "image", "version": "normal"},
+                    params={"exact": card_name, "format": "image", "version": version},
                     headers={"User-Agent": USER_AGENT},
                     follow_redirects=True,
                     timeout=15.0,

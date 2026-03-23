@@ -100,6 +100,10 @@
     <input type="checkbox" id="includeFunny" onchange="updateSettings()">
     Include Un-sets
   </label>
+  <label class="toggle">
+    <input type="checkbox" id="printArt" onchange="updateSettings()" checked>
+    Print Art
+  </label>
 </div>
 
 <div class="message" id="message"></div>
@@ -233,7 +237,8 @@ async function updateSettings() {
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({
       include_funny: document.getElementById('includeFunny').checked,
-      auto_print: document.getElementById('autoPrint').checked
+      auto_print: document.getElementById('autoPrint').checked,
+      print_art: document.getElementById('printArt').checked
     })
   });
 }
@@ -244,6 +249,7 @@ async function loadSettings() {
     const data = await resp.json();
     document.getElementById('includeFunny').checked = data.include_funny;
     document.getElementById('autoPrint').checked = data.auto_print;
+    document.getElementById('printArt').checked = data.print_art;
   } catch (e) { /* ignore */ }
 }
 
