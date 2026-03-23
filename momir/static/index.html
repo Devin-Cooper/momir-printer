@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Momir Printer</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: #1a1a2e; color: #eee; padding: 20px;
+    display: flex; flex-direction: column; align-items: center;
+    min-height: 100vh;
+  }
+  h1 { margin-bottom: 16px; font-size: 24px; }
+  .status {
+    display: flex; align-items: center; gap: 8px;
+    margin-bottom: 16px; font-size: 14px; color: #aaa;
+  }
+  .status-dot {
+    width: 10px; height: 10px; border-radius: 50%;
+    background: #666;
+  }
+  .status-dot.ready { background: #4ade80; }
+  .status-dot.connecting { background: #facc15; }
+  .status-dot.printing { background: #60a5fa; }
+  .status-dot.disconnected { background: #666; }
+  .connect-btn {
+    background: none; border: 1px solid #666; color: #aaa;
+    padding: 4px 12px; border-radius: 4px; cursor: pointer; font-size: 12px;
+  }
+  .connect-btn:hover { border-color: #aaa; color: #eee; }
+  .mv-picker { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 20px; justify-content: center; }
+  .mv-btn {
+    width: 44px; height: 44px; border-radius: 8px;
+    border: 2px solid #333; background: #16213e; color: #eee;
+    font-size: 18px; font-weight: bold; cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    transition: all 0.15s;
+  }
+  .mv-btn:hover { border-color: #60a5fa; background: #1a3a5c; }
+  .mv-btn.selected { border-color: #60a5fa; background: #1e40af; }
+  .card-area {
+    display: flex; flex-direction: column; align-items: center;
+    gap: 16px; margin-bottom: 20px; min-height: 400px;
+  }
+  .card-img {
+    max-width: 350px; border-radius: 12px;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+  }
+  .card-name { font-size: 20px; font-weight: bold; }
+  .card-type { font-size: 14px; color: #aaa; }
+  .card-text { font-size: 13px; color: #ccc; max-width: 350px; text-align: center; line-height: 1.4; }
+  .card-pt { font-size: 18px; font-weight: bold; }
+  .actions { display: flex; gap: 12px; margin-bottom: 20px; }
+  .btn {
+    padding: 10px 24px; border-radius: 8px; border: none;
+    font-size: 16px; font-weight: bold; cursor: pointer;
+    transition: all 0.15s;
+  }
+  .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+  .btn-roll { background: #4ade80; color: #1a1a2e; }
+  .btn-roll:hover:not(:disabled) { background: #22c55e; }
+  .btn-print { background: #60a5fa; color: #1a1a2e; }
+  .btn-print:hover:not(:disabled) { background: #3b82f6; }
+  .toggles {
+    display: flex; gap: 20px; font-size: 14px; color: #aaa;
+  }
+  .toggle { display: flex; align-items: center; gap: 6px; cursor: pointer; }
+  .toggle input { cursor: pointer; }
+  .message { color: #facc15; font-size: 14px; margin-top: 8px; min-height: 20px; }
+</style>
+</head>
+<body>
+<h1>Momir Printer</h1>
+
+<div class="status">
+  <div class="status-dot disconnected" id="statusDot"></div>
+  <span id="statusText">Disconnected</span>
+  <button class="connect-btn" id="connectBtn" onclick="connectPrinter()">Connect</button>
+</div>
+
+<div class="mv-picker" id="mvPicker"></div>
+
+<div class="card-area" id="cardArea">
+  <p style="color:#666; margin-top:100px;">Pick a mana value and roll</p>
+</div>
+
+<div class="actions">
+  <button class="btn btn-roll" id="rollBtn" onclick="roll()" disabled>Roll</button>
+  <button class="btn btn-print" id="printBtn" onclick="printCard()" disabled>Print</button>
+</div>
+
+<div class="toggles">
+  <label class="toggle">
+    <input type="checkbox" id="autoPrint" onchange="updateSettings()">
+    Auto-print
+  </label>
+  <label class="toggle">
+    <input type="checkbox" id="includeFunny" onchange="updateSettings()">
+    Include Un-sets
+  </label>
+</div>
+
+<div class="message" id="message"></div>
+
+<script>
+let selectedMV = null;
+let printerState = 'disconnected';
+let currentCard = null;
+
+const picker = document.getElementById('mvPicker');
+for (let i = 0; i <= 16; i++) {
+  const btn = document.createElement('button');
+  btn.className = 'mv-btn';
+  btn.textContent = i;
+  btn.onclick = () => selectMV(i, btn);
+  picker.appendChild(btn);
+}
+
+function selectMV(mv, btn) {
+  selectedMV = mv;
+  document.querySelectorAll('.mv-btn').forEach(b => b.classList.remove('selected'));
+  btn.classList.add('selected');
+  document.getElementById('rollBtn').disabled = false;
+}
+
+async function roll() {
+  if (selectedMV === null) return;
+  const rollBtn = document.getElementById('rollBtn');
+  rollBtn.disabled = true;
+  showMessage('Rolling...');
+
+  try {
+    const resp = await fetch('/roll', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        mv: selectedMV,
+        include_funny: document.getElementById('includeFunny').checked
+      })
+    });
+
+    if (resp.status === 404) {
+      showCard(null);
+      showMessage('No creatures at this mana value');
+      rollBtn.disabled = false;
+      return;
+    }
+
+    const data = await resp.json();
+    currentCard = data;
+    showCard(data);
+    showMessage('');
+    document.getElementById('printBtn').disabled = (printerState !== 'ready');
+
+    if (document.getElementById('autoPrint').checked && printerState === 'ready') {
+      await printCard();
+    }
+  } catch (e) {
+    showMessage('Error: ' + e.message);
+  }
+  rollBtn.disabled = false;
+}
+
+function showCard(card) {
+  const area = document.getElementById('cardArea');
+  if (!card) {
+    area.innerHTML = '<p style="color:#666; margin-top:100px;">No creature found</p>';
+    return;
+  }
+  const pt = (card.power && card.toughness) ? `${card.power} / ${card.toughness}` : '';
+  area.innerHTML = `
+    <img class="card-img" src="${card.image_url}" alt="${card.name}"
+         onerror="this.style.display='none'">
+    <div class="card-name">${card.name}</div>
+    <div class="card-type">${card.type}</div>
+    ${card.text ? `<div class="card-text">${card.text}</div>` : ''}
+    ${pt ? `<div class="card-pt">${pt}</div>` : ''}
+  `;
+}
+
+async function printCard() {
+  if (!currentCard) return;
+  const printBtn = document.getElementById('printBtn');
+  printBtn.disabled = true;
+  showMessage('Printing...');
+
+  try {
+    const resp = await fetch('/print', { method: 'POST' });
+    const data = await resp.json();
+    if (resp.ok) {
+      showMessage('Printed: ' + data.card);
+    } else {
+      showMessage('Print error: ' + data.detail);
+    }
+  } catch (e) {
+    showMessage('Print error: ' + e.message);
+  }
+  printBtn.disabled = (printerState !== 'ready');
+}
+
+async function connectPrinter() {
+  showMessage('Connecting...');
+  try {
+    const resp = await fetch('/connect', { method: 'POST' });
+    const data = await resp.json();
+    showMessage(data.connected ? 'Connected!' : 'Connection failed');
+    updateStatus();
+  } catch (e) {
+    showMessage('Connection error: ' + e.message);
+  }
+}
+
+async function updateStatus() {
+  try {
+    const resp = await fetch('/status');
+    const data = await resp.json();
+    printerState = data.state;
+    const dot = document.getElementById('statusDot');
+    const text = document.getElementById('statusText');
+    dot.className = 'status-dot ' + printerState;
+    text.textContent = printerState.charAt(0).toUpperCase() + printerState.slice(1);
+    if (currentCard) {
+      document.getElementById('printBtn').disabled = (printerState !== 'ready');
+    }
+  } catch (e) { /* ignore */ }
+}
+
+async function updateSettings() {
+  await fetch('/settings', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({
+      include_funny: document.getElementById('includeFunny').checked,
+      auto_print: document.getElementById('autoPrint').checked
+    })
+  });
+}
+
+async function loadSettings() {
+  try {
+    const resp = await fetch('/settings');
+    const data = await resp.json();
+    document.getElementById('includeFunny').checked = data.include_funny;
+    document.getElementById('autoPrint').checked = data.auto_print;
+  } catch (e) { /* ignore */ }
+}
+
+function showMessage(msg) {
+  document.getElementById('message').textContent = msg;
+}
+
+setInterval(updateStatus, 3000);
+loadSettings();
+updateStatus();
+</script>
+</body>
+</html>
