@@ -69,7 +69,7 @@ def render_card(card: dict, art_image: Image.Image | None = None, print_width: i
         art_image = art_image.resize((print_width, int(print_width * art_ratio)))
         art_height = art_image.height
 
-    y = PADDING
+    y = 0
     name_str = card["name"]
     mana_str = card.get("manaCost", "")
     name_height = name_font.getbbox("Ay")[3] - name_font.getbbox("Ay")[1]
@@ -99,11 +99,11 @@ def render_card(card: dict, art_image: Image.Image | None = None, print_width: i
         pt_height = pt_font.getbbox("Ay")[3] - pt_font.getbbox("Ay")[1]
         y += pt_height + 8
 
-    total_height = y + 2  # minimal bottom margin — printer adds its own feed
+    total_height = y
 
     img = Image.new("L", (print_width, total_height), 255)
     draw = ImageDraw.Draw(img)
-    y = PADDING
+    y = 0
 
     if mana_str:
         mana_bbox = name_font.getbbox(mana_str)
