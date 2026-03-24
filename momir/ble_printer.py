@@ -58,7 +58,7 @@ PROFILE_M04S = PrinterProfile(
         b'\x1f\x11\x0b'      # continuous media mode
         b'\x1f\x11\x35\x00'  # compression = raw
     ),
-    finalize_commands=b'\x1b\x64\x01',  # single short paper feed
+    finalize_commands=b'',  # no extra feed — image data ends at the right spot
     chunk_size=205,           # confirmed by BTSnoop — must be ≤244 (MTU-3)
     chunks_per_burst=3,       # confirmed by BTSnoop
     burst_delay=0.05,         # 50ms between bursts
