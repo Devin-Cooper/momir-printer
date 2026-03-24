@@ -589,9 +589,15 @@ function canvasToPackedBytes(canvas) {
 const SERVICE_UUID = '0000ff00-0000-1000-8000-00805f9b34fb';
 const WRITE_UUID = '0000ff02-0000-1000-8000-00805f9b34fb';
 const MAX_LINES_PER_BLOCK = 255;
-const CHUNK_SIZE = 512;
-const CHUNK_DELAY = 50;
 const POST_PRINT_DELAY = 2000;
+
+// Per-profile send parameters
+const SEND_PROFILES = {
+  M02:  { chunkSize: 512, chunksPerBurst: 1, burstDelay: 50 },
+  M02S: { chunkSize: 512, chunksPerBurst: 2, burstDelay: 50 },
+  M04S: { chunkSize: 512, chunksPerBurst: 3, burstDelay: 50 },
+};
+let activeSendProfile = SEND_PROFILES.M02S;
 
 const CMD_FEED = [0x1b, 0x64, 0x02];
 const CMD_FIN  = [0x1f, 0x11, 0x08, 0x1f, 0x11, 0x0e, 0x1f, 0x11, 0x07, 0x1f, 0x11, 0x09];
@@ -611,20 +617,24 @@ function detectPrinterProfile(deviceName) {
   if (name.includes('M04')) {
     activePrintWidth = 1232;
     activeInitCmds = INIT_M04;
+    activeSendProfile = SEND_PROFILES.M04S;
     return 'M04S';
   }
   if (name.includes('M02S') || name.includes('M02 PRO')) {
     activePrintWidth = 576;
     activeInitCmds = INIT_M02;
+    activeSendProfile = SEND_PROFILES.M02S;
     return 'M02S';
   }
   if (name.includes('T02') || name.includes('M02')) {
     activePrintWidth = 384;
     activeInitCmds = INIT_M02;
+    activeSendProfile = SEND_PROFILES.M02;
     return 'M02';
   }
   activePrintWidth = 576;
   activeInitCmds = INIT_M02;
+  activeSendProfile = SEND_PROFILES.M02S;
   return 'Unknown';
 }
 
@@ -697,14 +707,19 @@ async function connectPrinter() {
 }
 
 async function sendData(data) {
-  for (let i = 0; i < data.length; i += CHUNK_SIZE) {
-    const chunk = data.slice(i, i + CHUNK_SIZE);
+  const { chunkSize, chunksPerBurst, burstDelay } = activeSendProfile;
+  let chunkCount = 0;
+  for (let i = 0; i < data.length; i += chunkSize) {
+    const chunk = data.slice(i, i + chunkSize);
     if (useWriteWithoutResponse) {
       await bleCharacteristic.writeValueWithoutResponse(chunk);
     } else {
       await bleCharacteristic.writeValue(chunk);
     }
-    await sleep(CHUNK_DELAY);
+    chunkCount++;
+    if (chunkCount % chunksPerBurst === 0) {
+      await sleep(burstDelay);
+    }
   }
 }
 

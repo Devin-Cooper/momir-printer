@@ -22,12 +22,16 @@ CMD_FEED = b'\x1b\x64\x02'
 # --- Printer Profiles ---
 
 class PrinterProfile:
-    def __init__(self, name, print_width, init_commands, finalize_commands):
+    def __init__(self, name, print_width, init_commands, finalize_commands,
+                 chunk_size=512, chunks_per_burst=1, burst_delay=0.05):
         self.name = name
         self.print_width = print_width
         self.bytes_per_line = print_width // 8
         self.init_commands = init_commands
         self.finalize_commands = finalize_commands
+        self.chunk_size = chunk_size
+        self.chunks_per_burst = chunks_per_burst
+        self.burst_delay = burst_delay
 
 
 PROFILE_M02 = PrinterProfile(
@@ -42,6 +46,7 @@ PROFILE_M02S = PrinterProfile(
     print_width=576,
     init_commands=b'\x1b\x40\x1f\x11\x02\x04\x1b\x61\x01\x1f\x11\x24\x00',
     finalize_commands=b'\x1f\x11\x08\x1f\x11\x0e\x1f\x11\x07\x1f\x11\x09',
+    chunks_per_burst=2,
 )
 
 PROFILE_M04S = PrinterProfile(
@@ -54,6 +59,9 @@ PROFILE_M04S = PrinterProfile(
         b'\x1f\x11\x35\x00'  # compression mode = raw
     ),
     finalize_commands=b'\x1f\x11\x08\x1f\x11\x0e\x1f\x11\x07\x1f\x11\x09',
+    chunk_size=512,
+    chunks_per_burst=3,   # M04S handles 3 chunks per burst
+    burst_delay=0.05,
 )
 
 DEFAULT_PROFILE = PROFILE_M02S
@@ -134,7 +142,6 @@ except ImportError:
     BleakClient = None
     BleakScanner = None
 
-CHUNK_DELAY = 0.05
 POST_PRINT_DELAY = 2.0
 
 
@@ -213,12 +220,14 @@ class BLEPrinter:
                         img = img.convert("1")
 
                 commands = build_print_commands(img, self._profile)
-                mtu = (self._client.mtu_size - 3) if self._client else 500
-                chunk_size = max(20, mtu)
-                for i in range(0, len(commands), chunk_size):
-                    chunk = commands[i:i + chunk_size]
+                chunk_size = self._profile.chunk_size
+                burst = self._profile.chunks_per_burst
+                delay = self._profile.burst_delay
+                chunks = [commands[i:i + chunk_size] for i in range(0, len(commands), chunk_size)]
+                for i, chunk in enumerate(chunks):
                     await self._client.write_gatt_char(WRITE_UUID, chunk, response=False)
-                    await asyncio.sleep(CHUNK_DELAY)
+                    if (i + 1) % burst == 0:
+                        await asyncio.sleep(delay)
                 await asyncio.sleep(POST_PRINT_DELAY)
                 self._state = PrinterState.READY
                 return True
