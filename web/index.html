@@ -115,6 +115,10 @@
     <input type="checkbox" id="printArt" onchange="saveSettings()" checked>
     Print Art
   </label>
+  <label class="toggle">
+    <input type="checkbox" id="hidePreview" onchange="saveSettings()">
+    Hide Preview
+  </label>
 </div>
 
 <div class="message" id="message"></div>
@@ -173,6 +177,7 @@ function loadSettings() {
     document.getElementById('autoPrint').checked = saved.autoPrint || false;
     document.getElementById('includeFunny').checked = saved.includeFunny || false;
     document.getElementById('printArt').checked = saved.printArt !== false;
+    document.getElementById('hidePreview').checked = saved.hidePreview || false;
   } catch (e) { /* ignore */ }
 }
 
@@ -181,6 +186,7 @@ function saveSettings() {
     autoPrint: document.getElementById('autoPrint').checked,
     includeFunny: document.getElementById('includeFunny').checked,
     printArt: document.getElementById('printArt').checked,
+    hidePreview: document.getElementById('hidePreview').checked,
   }));
 }
 
@@ -253,7 +259,11 @@ async function roll() {
   }
 
   currentCard = creature;
-  showCard(creature);
+  if (document.getElementById('hidePreview').checked) {
+    document.getElementById('cardArea').innerHTML = '<p style="color:#4ade80; margin-top:100px; font-size:20px; font-weight:bold;">Card rolled! (preview hidden)</p>';
+  } else {
+    showCard(creature);
+  }
   showMessage('');
 
   if (!isIOS) {
@@ -410,25 +420,49 @@ function renderCardToCanvas(card, artImg) {
 }
 
 function canvasToPackedBytes(canvas) {
+  const w = canvas.width;
+  const h = canvas.height;
   const ctx = canvas.getContext('2d');
-  const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  const imageData = ctx.getImageData(0, 0, w, h);
   const pixels = imageData.data;
 
-  const result = new Uint8Array(BYTES_PER_LINE * canvas.height);
-  let idx = 0;
+  // Convert to grayscale float array for dithering
+  const gray = new Float32Array(w * h);
+  for (let i = 0; i < w * h; i++) {
+    const px = i * 4;
+    gray[i] = 0.299 * pixels[px] + 0.587 * pixels[px + 1] + 0.114 * pixels[px + 2];
+  }
 
-  for (let y = 0; y < canvas.height; y++) {
+  // Floyd-Steinberg dithering
+  const bw = new Uint8Array(w * h); // 0 = white, 1 = black
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const idx = y * w + x;
+      const oldVal = gray[idx];
+      const newVal = oldVal < 128 ? 0 : 255;
+      bw[idx] = newVal === 0 ? 1 : 0; // 1 = black for printer
+      const err = oldVal - newVal;
+      // Distribute error to neighbors
+      if (x + 1 < w)               gray[idx + 1]     += err * 7 / 16;
+      if (y + 1 < h && x - 1 >= 0) gray[(y+1)*w+x-1] += err * 3 / 16;
+      if (y + 1 < h)               gray[(y+1)*w+x]    += err * 5 / 16;
+      if (y + 1 < h && x + 1 < w)  gray[(y+1)*w+x+1]  += err * 1 / 16;
+    }
+  }
+
+  // Pack into bytes: MSB = leftmost pixel
+  const result = new Uint8Array(BYTES_PER_LINE * h);
+  let outIdx = 0;
+  for (let y = 0; y < h; y++) {
     for (let xByte = 0; xByte < BYTES_PER_LINE; xByte++) {
       let byte = 0;
       for (let bit = 0; bit < 8; bit++) {
-        const px = (y * canvas.width + xByte * 8 + bit) * 4;
-        const gray = 0.299 * pixels[px] + 0.587 * pixels[px + 1] + 0.114 * pixels[px + 2];
-        if (gray < 128) {
+        if (bw[y * w + xByte * 8 + bit]) {
           byte |= 1 << (7 - bit);
         }
       }
       if (byte === 0x0a) byte = 0x14;
-      result[idx++] = byte;
+      result[outIdx++] = byte;
     }
   }
   return result;
@@ -493,7 +527,12 @@ async function connectPrinter() {
 
   try {
     bleDevice = await navigator.bluetooth.requestDevice({
-      filters: [{ services: [SERVICE_UUID] }]
+      filters: [
+        { namePrefix: 'Mr.in_' },
+        { namePrefix: 'M02' },
+        { namePrefix: 'T02' },
+      ],
+      optionalServices: [SERVICE_UUID],
     });
 
     bleDevice.addEventListener('gattserverdisconnected', () => {

@@ -25,6 +25,7 @@ _settings = {
     "include_funny": False,
     "auto_print": False,
     "print_art": True,
+    "hide_preview": False,
 }
 
 CARDS_JSON_PATH = str(Path.home() / "Downloads" / "AtomicCards.json")
@@ -56,6 +57,7 @@ class SettingsUpdate(BaseModel):
     include_funny: bool | None = None
     auto_print: bool | None = None
     print_art: bool | None = None
+    hide_preview: bool | None = None
 
 
 @app.post("/roll")
@@ -128,6 +130,8 @@ async def update_settings(update: SettingsUpdate):
         _settings["auto_print"] = update.auto_print
     if update.print_art is not None:
         _settings["print_art"] = update.print_art
+    if update.hide_preview is not None:
+        _settings["hide_preview"] = update.hide_preview
     return _settings.copy()
 
 
