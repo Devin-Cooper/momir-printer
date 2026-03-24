@@ -127,6 +127,33 @@ python -m pytest tests/ -v
 - **Scryfall API** for card images
 - **Phomemo M02S** ESC/POS protocol over BLE
 
+## Web App
+
+A standalone browser version that works on Android phones and desktop Chrome — no server needed.
+
+### Build the card database
+
+```bash
+python scripts/build_creatures.py
+```
+
+### Serve locally
+
+```bash
+cd web && python3 -m http.server 8080
+```
+
+Open http://localhost:8080 in Chrome.
+
+### Browser Support
+
+- Chrome/Edge on Android and desktop
+- **Not supported on iOS** (Web Bluetooth unavailable on any iOS browser)
+
+### Deploy
+
+The `web/` directory is fully static — deploy to GitHub Pages, Netlify, or any static host. Just make sure `creatures.json` is in the same directory as `index.html`.
+
 ## License
 
 MIT
