@@ -1,12 +1,11 @@
-"""Thermal Renderer — renders card data to a 576px-wide 1-bit image for the M02S."""
+"""Thermal Renderer — renders card data to a 1-bit image for Phomemo thermal printers."""
 
 import os
 import textwrap
 from PIL import Image, ImageDraw, ImageFont
 
-PRINT_WIDTH = 576
+DEFAULT_PRINT_WIDTH = 576
 PADDING = 12
-CONTENT_WIDTH = PRINT_WIDTH - (PADDING * 2)
 RULE_HEIGHT = 1
 
 # Font search paths — DejaVu Sans preferred (spec requirement), Arial as fallback
@@ -55,7 +54,8 @@ def _wrap_text(text: str, font: ImageFont.FreeTypeFont, max_width: int) -> list[
     return lines or [""]
 
 
-def render_card(card: dict, art_image: Image.Image | None = None) -> Image.Image:
+def render_card(card: dict, art_image: Image.Image | None = None, print_width: int = DEFAULT_PRINT_WIDTH) -> Image.Image:
+    content_width = print_width - (PADDING * 2)
     name_font = _load_font(36, bold=True)
     type_font = _load_font(26, bold=False)
     text_font = _load_font(24, bold=False)
@@ -66,7 +66,7 @@ def render_card(card: dict, art_image: Image.Image | None = None) -> Image.Image
     if art_image is not None:
         art_image = art_image.convert("L")
         art_ratio = art_image.height / art_image.width
-        art_image = art_image.resize((PRINT_WIDTH, int(PRINT_WIDTH * art_ratio)))
+        art_image = art_image.resize((print_width, int(print_width * art_ratio)))
         art_height = art_image.height
 
     y = PADDING
@@ -87,7 +87,7 @@ def render_card(card: dict, art_image: Image.Image | None = None) -> Image.Image
     rules_lines = []
     if rules_text:
         for paragraph in rules_text.split("\n"):
-            rules_lines.extend(_wrap_text(paragraph, text_font, CONTENT_WIDTH))
+            rules_lines.extend(_wrap_text(paragraph, text_font, content_width))
         text_line_height = text_font.getbbox("Ay")[3] - text_font.getbbox("Ay")[1]
         y += (text_line_height + 4) * len(rules_lines) + 6
         y += RULE_HEIGHT + 6
@@ -102,15 +102,15 @@ def render_card(card: dict, art_image: Image.Image | None = None) -> Image.Image
     y += PADDING
     total_height = y
 
-    img = Image.new("L", (PRINT_WIDTH, total_height), 255)
+    img = Image.new("L", (print_width, total_height), 255)
     draw = ImageDraw.Draw(img)
     y = PADDING
 
     if mana_str:
         mana_bbox = name_font.getbbox(mana_str)
         mana_w = mana_bbox[2] - mana_bbox[0]
-        draw.text((PRINT_WIDTH - PADDING - mana_w, y), mana_str, font=name_font, fill=0)
-        max_name_w = CONTENT_WIDTH - mana_w - 12
+        draw.text((print_width - PADDING - mana_w, y), mana_str, font=name_font, fill=0)
+        max_name_w = content_width - mana_w - 12
         display_name = name_str
         while name_font.getbbox(display_name)[2] > max_name_w and len(display_name) > 1:
             display_name = display_name[:-1]
@@ -119,20 +119,20 @@ def render_card(card: dict, art_image: Image.Image | None = None) -> Image.Image
         draw.text((PADDING, y), name_str, font=name_font, fill=0)
     y += name_height + 8
 
-    draw.line([(PADDING, y), (PRINT_WIDTH - PADDING, y)], fill=0, width=RULE_HEIGHT)
+    draw.line([(PADDING, y), (print_width - PADDING, y)], fill=0, width=RULE_HEIGHT)
     y += RULE_HEIGHT + 6
 
     # Paste art after name line
     if art_image is not None:
         img.paste(art_image, (0, y))
         y += art_height + 6
-        draw.line([(PADDING, y), (PRINT_WIDTH - PADDING, y)], fill=0, width=RULE_HEIGHT)
+        draw.line([(PADDING, y), (print_width - PADDING, y)], fill=0, width=RULE_HEIGHT)
         y += RULE_HEIGHT + 6
 
     draw.text((PADDING, y), type_str, font=type_font, fill=0)
     y += type_height + 6
 
-    draw.line([(PADDING, y), (PRINT_WIDTH - PADDING, y)], fill=0, width=RULE_HEIGHT)
+    draw.line([(PADDING, y), (print_width - PADDING, y)], fill=0, width=RULE_HEIGHT)
     y += RULE_HEIGHT + 6
 
     if rules_lines:
@@ -141,14 +141,14 @@ def render_card(card: dict, art_image: Image.Image | None = None) -> Image.Image
             draw.text((PADDING, y), line, font=text_font, fill=0)
             y += text_line_height + 4
         y += 6
-        draw.line([(PADDING, y), (PRINT_WIDTH - PADDING, y)], fill=0, width=RULE_HEIGHT)
+        draw.line([(PADDING, y), (print_width - PADDING, y)], fill=0, width=RULE_HEIGHT)
         y += RULE_HEIGHT + 6
 
     if power and toughness:
         pt_str = f"{power} / {toughness}"
         pt_bbox = pt_font.getbbox(pt_str)
         pt_w = pt_bbox[2] - pt_bbox[0]
-        draw.text((PRINT_WIDTH - PADDING - pt_w, y), pt_str, font=pt_font, fill=0)
+        draw.text((print_width - PADDING - pt_w, y), pt_str, font=pt_font, fill=0)
 
     return img.convert("1")
 

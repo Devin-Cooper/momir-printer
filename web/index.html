@@ -144,6 +144,8 @@
     <li>Phomemo M02S (576 dots, 53mm)</li>
     <li>Phomemo M02 Pro (576 dots, 53mm)</li>
     <li>Phomemo T02 (384 dots, 48mm)</li>
+    <li>Phomemo M04S (1232 dots, 110mm) — prints landscape</li>
+    <li>Phomemo M04AS (1232 dots, 110mm) — prints landscape</li>
   </ul>
 
   <h3>Browser Support</h3>
@@ -368,10 +370,13 @@ async function roll() {
 // ============================================================
 // Thermal Renderer (Canvas API)
 // ============================================================
-const PRINT_WIDTH = 576;
-const BYTES_PER_LINE = PRINT_WIDTH / 8; // 72
+const PRINTER_PROFILES = {
+  M02:  { name: 'M02',  width: 384 },
+  M02S: { name: 'M02S', width: 576 },
+  M04S: { name: 'M04S', width: 1232 },
+};
+let activePrintWidth = 576; // default, updated on connect
 const PADDING = 12;
-const CONTENT_WIDTH = PRINT_WIDTH - PADDING * 2;
 
 function measureTextLines(ctx, text, maxWidth) {
   const words = text.split(' ');
@@ -391,6 +396,8 @@ function measureTextLines(ctx, text, maxWidth) {
 }
 
 function renderCardToCanvas(card, artImg) {
+  const RENDER_WIDTH = 576; // always render at this readable size
+  const RENDER_CONTENT = RENDER_WIDTH - PADDING * 2;
   const measure = document.createElement('canvas');
   const mctx = measure.getContext('2d');
 
@@ -405,7 +412,7 @@ function renderCardToCanvas(card, artImg) {
   let artH = 0;
   if (artImg) {
     const ratio = artImg.height / artImg.width;
-    artH = Math.round(PRINT_WIDTH * ratio);
+    artH = Math.round(RENDER_WIDTH * ratio);
   }
 
   mctx.font = typeFont;
@@ -417,7 +424,7 @@ function renderCardToCanvas(card, artImg) {
   if (card.x) {
     const paragraphs = card.x.split('\n');
     for (const para of paragraphs) {
-      rulesLines.push(...measureTextLines(mctx, para, CONTENT_WIDTH));
+      rulesLines.push(...measureTextLines(mctx, para, RENDER_CONTENT));
     }
     rulesH = (24 + 4) * rulesLines.length + 6 + 1 + 6;
   }
@@ -436,12 +443,12 @@ function renderCardToCanvas(card, artImg) {
     + PADDING;
 
   const canvas = document.createElement('canvas');
-  canvas.width = PRINT_WIDTH;
+  canvas.width = RENDER_WIDTH;
   canvas.height = totalHeight;
   const ctx = canvas.getContext('2d');
 
   ctx.fillStyle = '#fff';
-  ctx.fillRect(0, 0, PRINT_WIDTH, totalHeight);
+  ctx.fillRect(0, 0, RENDER_WIDTH, totalHeight);
   ctx.fillStyle = '#000';
 
   let y = PADDING;
@@ -451,8 +458,8 @@ function renderCardToCanvas(card, artImg) {
   const mana = card.m || '';
   if (mana) {
     const manaW = ctx.measureText(mana).width;
-    ctx.fillText(mana, PRINT_WIDTH - PADDING - manaW, y + 36);
-    const maxNameW = CONTENT_WIDTH - manaW - 12;
+    ctx.fillText(mana, RENDER_WIDTH - PADDING - manaW, y + 36);
+    const maxNameW = RENDER_CONTENT - manaW - 12;
     let displayName = card.n;
     while (ctx.measureText(displayName).width > maxNameW && displayName.length > 1) {
       displayName = displayName.slice(0, -1);
@@ -464,16 +471,16 @@ function renderCardToCanvas(card, artImg) {
   y += nameH;
 
   // Rule
-  ctx.fillRect(PADDING, y, CONTENT_WIDTH, 1);
+  ctx.fillRect(PADDING, y, RENDER_CONTENT, 1);
   y += 1 + 6;
 
   // Art
   if (artImg) {
     const ratio = artImg.height / artImg.width;
-    const ah = Math.round(PRINT_WIDTH * ratio);
-    ctx.drawImage(artImg, 0, y, PRINT_WIDTH, ah);
+    const ah = Math.round(RENDER_WIDTH * ratio);
+    ctx.drawImage(artImg, 0, y, RENDER_WIDTH, ah);
     y += ah + 6;
-    ctx.fillRect(PADDING, y, CONTENT_WIDTH, 1);
+    ctx.fillRect(PADDING, y, RENDER_CONTENT, 1);
     y += 1 + 6;
   }
 
@@ -482,7 +489,7 @@ function renderCardToCanvas(card, artImg) {
   ctx.fillText(card.t, PADDING, y + 26);
   y += typeH;
 
-  ctx.fillRect(PADDING, y, CONTENT_WIDTH, 1);
+  ctx.fillRect(PADDING, y, RENDER_CONTENT, 1);
   y += 1 + 6;
 
   // Rules text
@@ -493,7 +500,7 @@ function renderCardToCanvas(card, artImg) {
       y += 24 + 4;
     }
     y += 6;
-    ctx.fillRect(PADDING, y, CONTENT_WIDTH, 1);
+    ctx.fillRect(PADDING, y, RENDER_CONTENT, 1);
     y += 1 + 6;
   }
 
@@ -502,15 +509,35 @@ function renderCardToCanvas(card, artImg) {
     ctx.font = ptFont;
     const ptStr = `${card.p} / ${card.h}`;
     const ptW = ctx.measureText(ptStr).width;
-    ctx.fillText(ptStr, PRINT_WIDTH - PADDING - ptW, y + 34);
+    ctx.fillText(ptStr, RENDER_WIDTH - PADDING - ptW, y + 34);
   }
 
+  return canvas;
+}
+
+function prepareForPrinter(canvas, printerWidth) {
+  // For wide printers (M04S), rotate 90 degrees and center on paper
+  if (printerWidth > 576) {
+    const rotated = document.createElement('canvas');
+    rotated.width = printerWidth;
+    rotated.height = canvas.width; // original width becomes height after rotation
+    const ctx = rotated.getContext('2d');
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(0, 0, rotated.width, rotated.height);
+    // Center the rotated card on the wide paper
+    const offsetX = Math.floor((printerWidth - canvas.height) / 2);
+    ctx.translate(offsetX + canvas.height, 0);
+    ctx.rotate(Math.PI / 2);
+    ctx.drawImage(canvas, 0, 0);
+    return rotated;
+  }
   return canvas;
 }
 
 function canvasToPackedBytes(canvas) {
   const w = canvas.width;
   const h = canvas.height;
+  const bytesPerLine = w / 8;
   const ctx = canvas.getContext('2d');
   const imageData = ctx.getImageData(0, 0, w, h);
   const pixels = imageData.data;
@@ -523,15 +550,14 @@ function canvasToPackedBytes(canvas) {
   }
 
   // Floyd-Steinberg dithering
-  const bw = new Uint8Array(w * h); // 0 = white, 1 = black
+  const bw = new Uint8Array(w * h);
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
       const idx = y * w + x;
       const oldVal = gray[idx];
       const newVal = oldVal < 128 ? 0 : 255;
-      bw[idx] = newVal === 0 ? 1 : 0; // 1 = black for printer
+      bw[idx] = newVal === 0 ? 1 : 0;
       const err = oldVal - newVal;
-      // Distribute error to neighbors
       if (x + 1 < w)               gray[idx + 1]     += err * 7 / 16;
       if (y + 1 < h && x - 1 >= 0) gray[(y+1)*w+x-1] += err * 3 / 16;
       if (y + 1 < h)               gray[(y+1)*w+x]    += err * 5 / 16;
@@ -540,10 +566,10 @@ function canvasToPackedBytes(canvas) {
   }
 
   // Pack into bytes: MSB = leftmost pixel
-  const result = new Uint8Array(BYTES_PER_LINE * h);
+  const result = new Uint8Array(bytesPerLine * h);
   let outIdx = 0;
   for (let y = 0; y < h; y++) {
-    for (let xByte = 0; xByte < BYTES_PER_LINE; xByte++) {
+    for (let xByte = 0; xByte < bytesPerLine; xByte++) {
       let byte = 0;
       for (let bit = 0; bit < 8; bit++) {
         if (bw[y * w + xByte * 8 + bit]) {
@@ -567,32 +593,53 @@ const CHUNK_SIZE = 512;
 const CHUNK_DELAY = 50;
 const POST_PRINT_DELAY = 2000;
 
-const CMD_INIT      = [0x1b, 0x40];
-const CMD_PROP_INIT = [0x1f, 0x11, 0x02, 0x04];
-const CMD_CENTER    = [0x1b, 0x61, 0x01];
-const CMD_PREAMBLE  = [0x1f, 0x11, 0x24, 0x00];
-const CMD_FEED      = [0x1b, 0x64, 0x02];
-const CMD_FIN1      = [0x1f, 0x11, 0x08];
-const CMD_FIN2      = [0x1f, 0x11, 0x0e];
-const CMD_FIN3      = [0x1f, 0x11, 0x07];
-const CMD_FIN4      = [0x1f, 0x11, 0x09];
+const CMD_FEED = [0x1b, 0x64, 0x02];
+const CMD_FIN  = [0x1f, 0x11, 0x08, 0x1f, 0x11, 0x0e, 0x1f, 0x11, 0x07, 0x1f, 0x11, 0x09];
+
+// Init commands per printer family
+const INIT_M02 = [0x1b, 0x40, 0x1f, 0x11, 0x02, 0x04, 0x1b, 0x61, 0x01, 0x1f, 0x11, 0x24, 0x00];
+const INIT_M04 = [0x1f, 0x11, 0x02, 0x04, 0x1f, 0x11, 0x37, 0x64, 0x1f, 0x11, 0x0b, 0x1f, 0x11, 0x35, 0x00];
 
 let bleDevice = null;
 let bleCharacteristic = null;
 let useWriteWithoutResponse = true;
+let activeInitCmds = INIT_M02;
+let activeFinCmds = CMD_FIN;
 
-function buildPrintCommands(packedBytes, height) {
+function detectPrinterProfile(deviceName) {
+  const name = (deviceName || '').toUpperCase();
+  if (name.includes('M04')) {
+    activePrintWidth = 1232;
+    activeInitCmds = INIT_M04;
+    return 'M04S';
+  }
+  if (name.includes('M02S') || name.includes('M02 PRO')) {
+    activePrintWidth = 576;
+    activeInitCmds = INIT_M02;
+    return 'M02S';
+  }
+  if (name.includes('T02') || name.includes('M02')) {
+    activePrintWidth = 384;
+    activeInitCmds = INIT_M02;
+    return 'M02';
+  }
+  activePrintWidth = 576;
+  activeInitCmds = INIT_M02;
+  return 'Unknown';
+}
+
+function buildPrintCommands(packedBytes, height, bytesPerLine, initCmds, finCmds) {
   const commands = [];
-  commands.push(...CMD_INIT, ...CMD_PROP_INIT, ...CMD_CENTER, ...CMD_PREAMBLE);
+  commands.push(...initCmds);
 
   let offset = 0;
   while (offset < height) {
     const lines = Math.min(MAX_LINES_PER_BLOCK, height - offset);
     commands.push(0x1d, 0x76, 0x30, 0x00);
-    commands.push(BYTES_PER_LINE & 0xff, (BYTES_PER_LINE >> 8) & 0xff);
+    commands.push(bytesPerLine & 0xff, (bytesPerLine >> 8) & 0xff);
     commands.push(lines & 0xff, (lines >> 8) & 0xff);
-    const start = offset * BYTES_PER_LINE;
-    const end = start + lines * BYTES_PER_LINE;
+    const start = offset * bytesPerLine;
+    const end = start + lines * bytesPerLine;
     for (let i = start; i < end; i++) {
       commands.push(packedBytes[i]);
     }
@@ -600,7 +647,7 @@ function buildPrintCommands(packedBytes, height) {
   }
 
   commands.push(...CMD_FEED, ...CMD_FEED);
-  commands.push(...CMD_FIN1, ...CMD_FIN2, ...CMD_FIN3, ...CMD_FIN4);
+  commands.push(...finCmds);
   return new Uint8Array(commands);
 }
 
@@ -636,9 +683,10 @@ async function connectPrinter() {
     bleCharacteristic = await service.getCharacteristic(WRITE_UUID);
     useWriteWithoutResponse = bleCharacteristic.properties.writeWithoutResponse;
 
+    const profileName = detectPrinterProfile(bleDevice.name);
     printerState = 'ready';
     updatePrinterUI();
-    showMessage('Connected!');
+    showMessage(`Connected to ${bleDevice.name} (${profileName}, ${activePrintWidth} dots)`);
   } catch (e) {
     printerState = 'disconnected';
     bleCharacteristic = null;
@@ -680,9 +728,11 @@ async function printCard() {
       }
     }
 
-    const canvas = renderCardToCanvas(currentCard, artImg);
+    const rendered = renderCardToCanvas(currentCard, artImg);
+    const canvas = prepareForPrinter(rendered, activePrintWidth);
+    const bytesPerLine = canvas.width / 8;
     const packed = canvasToPackedBytes(canvas);
-    const commands = buildPrintCommands(packed, canvas.height);
+    const commands = buildPrintCommands(packed, canvas.height, bytesPerLine, activeInitCmds, activeFinCmds);
     await sendData(commands);
     await sleep(POST_PRINT_DELAY);
 

@@ -1,29 +1,74 @@
-"""BLE Printer — Phomemo M02S Bluetooth printing via ESC/POS over BLE."""
+"""BLE Printer — Phomemo thermal printer family via ESC/POS over BLE."""
 
 import asyncio
 import struct
 from enum import Enum
 from PIL import Image
 
-PRINT_WIDTH = 576
-BYTES_PER_LINE = PRINT_WIDTH // 8  # 72
-MAX_LINES_PER_BLOCK = 255
-
+# BLE UUIDs (shared across all Phomemo models)
 SERVICE_UUID = "0000ff00-0000-1000-8000-00805f9b34fb"
 WRITE_UUID = "0000ff02-0000-1000-8000-00805f9b34fb"
 NOTIFY_UUID = "0000ff03-0000-1000-8000-00805f9b34fb"
 
-DEVICE_NAMES = ("M02S", "M02 Pro", "M02", "T02", "Mr.in_M02", "Mr.in_")
+MAX_LINES_PER_BLOCK = 255
 
-CMD_INIT = b'\x1b\x40'
-CMD_PROP_INIT = b'\x1f\x11\x02\x04'
-CMD_CENTER = b'\x1b\x61\x01'
-CMD_M02S_PREAMBLE = b'\x1f\x11\x24\x00'
+# Device name patterns for BLE scanning
+DEVICE_NAMES = ("M04S", "M04AS", "M02S", "M02 Pro", "M02", "T02", "Mr.in_")
+
+# ESC/POS commands shared across models
 CMD_FEED = b'\x1b\x64\x02'
-CMD_FIN_1 = b'\x1f\x11\x08'
-CMD_FIN_2 = b'\x1f\x11\x0e'
-CMD_FIN_3 = b'\x1f\x11\x07'
-CMD_FIN_4 = b'\x1f\x11\x09'
+
+
+# --- Printer Profiles ---
+
+class PrinterProfile:
+    def __init__(self, name, print_width, init_commands, finalize_commands):
+        self.name = name
+        self.print_width = print_width
+        self.bytes_per_line = print_width // 8
+        self.init_commands = init_commands
+        self.finalize_commands = finalize_commands
+
+
+PROFILE_M02 = PrinterProfile(
+    name="M02",
+    print_width=384,
+    init_commands=b'\x1b\x40\x1f\x11\x02\x04\x1b\x61\x01\x1f\x11\x24\x00',
+    finalize_commands=b'\x1f\x11\x08\x1f\x11\x0e\x1f\x11\x07\x1f\x11\x09',
+)
+
+PROFILE_M02S = PrinterProfile(
+    name="M02S",
+    print_width=576,
+    init_commands=b'\x1b\x40\x1f\x11\x02\x04\x1b\x61\x01\x1f\x11\x24\x00',
+    finalize_commands=b'\x1f\x11\x08\x1f\x11\x0e\x1f\x11\x07\x1f\x11\x09',
+)
+
+PROFILE_M04S = PrinterProfile(
+    name="M04S",
+    print_width=1232,
+    init_commands=(
+        b'\x1f\x11\x02\x04'  # density (default 0x04)
+        b'\x1f\x11\x37\x64'  # heat/speed (0x64 = 100)
+        b'\x1f\x11\x0b'      # required init
+        b'\x1f\x11\x35\x00'  # compression mode = raw
+    ),
+    finalize_commands=b'\x1f\x11\x08\x1f\x11\x0e\x1f\x11\x07\x1f\x11\x09',
+)
+
+DEFAULT_PROFILE = PROFILE_M02S
+
+
+def detect_profile(device_name: str) -> PrinterProfile:
+    """Detect printer profile from BLE device name."""
+    name = device_name.upper() if device_name else ""
+    if "M04" in name:
+        return PROFILE_M04S
+    if "M02S" in name or "M02 PRO" in name:
+        return PROFILE_M02S
+    if "T02" in name or "M02" in name:
+        return PROFILE_M02
+    return DEFAULT_PROFILE
 
 
 class PrinterState(str, Enum):
@@ -33,12 +78,14 @@ class PrinterState(str, Enum):
     PRINTING = "printing"
 
 
-def pack_image_to_bytes(img: Image.Image) -> bytes:
+def pack_image_to_bytes(img: Image.Image, bytes_per_line: int) -> bytes:
+    """Pack a 1-bit image into printer bytes. Width must match bytes_per_line * 8."""
     assert img.mode == "1"
-    assert img.width == PRINT_WIDTH
+    assert img.width == bytes_per_line * 8
+
     result = bytearray()
     for y in range(img.height):
-        for x_byte in range(BYTES_PER_LINE):
+        for x_byte in range(bytes_per_line):
             byte = 0
             for bit in range(8):
                 px = img.getpixel((x_byte * 8 + bit, y))
@@ -50,30 +97,32 @@ def pack_image_to_bytes(img: Image.Image) -> bytes:
     return bytes(result)
 
 
-def build_print_commands(img: Image.Image) -> bytes:
-    bitmap = pack_image_to_bytes(img)
+def build_print_commands(img: Image.Image, profile: PrinterProfile | None = None) -> bytes:
+    """Build ESC/POS commands for the given printer profile."""
+    if profile is None:
+        profile = DEFAULT_PROFILE
+
+    bitmap = pack_image_to_bytes(img, profile.bytes_per_line)
     commands = bytearray()
-    commands.extend(CMD_INIT)
-    commands.extend(CMD_PROP_INIT)
-    commands.extend(CMD_CENTER)
-    commands.extend(CMD_M02S_PREAMBLE)
+
+    commands.extend(profile.init_commands)
+
     total_lines = img.height
     offset = 0
     while offset < total_lines:
         lines = min(MAX_LINES_PER_BLOCK, total_lines - offset)
         commands.extend(b'\x1d\x76\x30\x00')
-        commands.extend(struct.pack('<H', BYTES_PER_LINE))
+        commands.extend(struct.pack('<H', profile.bytes_per_line))
         commands.extend(struct.pack('<H', lines))
-        start = offset * BYTES_PER_LINE
-        end = start + (lines * BYTES_PER_LINE)
+        start = offset * profile.bytes_per_line
+        end = start + (lines * profile.bytes_per_line)
         commands.extend(bitmap[start:end])
         offset += lines
+
     commands.extend(CMD_FEED)
     commands.extend(CMD_FEED)
-    commands.extend(CMD_FIN_1)
-    commands.extend(CMD_FIN_2)
-    commands.extend(CMD_FIN_3)
-    commands.extend(CMD_FIN_4)
+    commands.extend(profile.finalize_commands)
+
     return bytes(commands)
 
 
@@ -94,18 +143,25 @@ class BLEPrinter:
         self._client: BleakClient | None = None
         self._state = PrinterState.DISCONNECTED
         self._lock = asyncio.Lock()
+        self._profile = DEFAULT_PROFILE
+        self._device_name: str | None = None
 
     @property
     def state(self) -> PrinterState:
         return self._state
 
-    async def scan(self, timeout: float = 10.0) -> str | None:
+    @property
+    def profile(self) -> PrinterProfile:
+        return self._profile
+
+    async def scan(self, timeout: float = 10.0) -> tuple[str, str] | None:
+        """Scan for printer. Returns (address, name) or None."""
         if BleakScanner is None:
             raise RuntimeError("bleak not installed")
         devices = await BleakScanner.discover(timeout=timeout)
         for d in devices:
             if d.name and any(name in d.name for name in DEVICE_NAMES):
-                return d.address
+                return (d.address, d.name)
         return None
 
     async def connect(self, address: str | None = None) -> bool:
@@ -114,10 +170,12 @@ class BLEPrinter:
         self._state = PrinterState.CONNECTING
         try:
             if address is None:
-                address = await self.scan()
-                if address is None:
+                result = await self.scan()
+                if result is None:
                     self._state = PrinterState.DISCONNECTED
                     return False
+                address, self._device_name = result
+            self._profile = detect_profile(self._device_name or "")
             self._client = BleakClient(address)
             await self._client.connect()
             self._state = PrinterState.READY
@@ -140,7 +198,21 @@ class BLEPrinter:
                     return False
             self._state = PrinterState.PRINTING
             try:
-                commands = build_print_commands(img)
+                # For wide printers, rotate landscape and center
+                if self._profile.print_width > 576:
+                    img = img.rotate(90, expand=True)
+                    # Center on wider paper
+                    padded = Image.new("1", (self._profile.print_width, img.height), 1)
+                    offset_x = (self._profile.print_width - img.width) // 2
+                    padded.paste(img, (offset_x, 0))
+                    img = padded
+                elif img.width != self._profile.print_width:
+                    ratio = img.height / img.width
+                    img = img.resize((self._profile.print_width, int(self._profile.print_width * ratio)))
+                    if img.mode != "1":
+                        img = img.convert("1")
+
+                commands = build_print_commands(img, self._profile)
                 mtu = (self._client.mtu_size - 3) if self._client else 500
                 chunk_size = max(20, mtu)
                 for i in range(0, len(commands), chunk_size):
@@ -156,8 +228,8 @@ class BLEPrinter:
                 return False
 
 
-def write_dry_run(img: Image.Image, output_path: str):
-    commands = build_print_commands(img)
+def write_dry_run(img: Image.Image, output_path: str, profile: PrinterProfile | None = None):
+    commands = build_print_commands(img, profile)
     with open(output_path, "wb") as f:
         f.write(commands)
     return len(commands)
@@ -168,18 +240,20 @@ if __name__ == "__main__":
     import sys
 
     parser = argparse.ArgumentParser(description="BLE Printer CLI")
-    parser.add_argument("image", nargs="?", help="Path to a 576px-wide image to print")
-    parser.add_argument("--scan-only", action="store_true", help="Just scan for the printer")
+    parser.add_argument("image", nargs="?", help="Path to image to print")
+    parser.add_argument("--scan-only", action="store_true", help="Just scan for printers")
     parser.add_argument("--dry-run", metavar="OUTPUT", help="Write commands to file instead of printing")
     args = parser.parse_args()
 
     async def main():
         if args.scan_only:
             printer = BLEPrinter()
-            print("Scanning for M02S printer...")
-            addr = await printer.scan()
-            if addr:
-                print(f"Found printer at: {addr}")
+            print("Scanning for Phomemo printers...")
+            result = await printer.scan()
+            if result:
+                addr, name = result
+                profile = detect_profile(name)
+                print(f"Found: {name} at {addr} ({profile.print_width} dots/line)")
             else:
                 print("No printer found.")
             return
@@ -189,8 +263,6 @@ if __name__ == "__main__":
             sys.exit(1)
 
         img = Image.open(args.image)
-        if img.width != PRINT_WIDTH:
-            img = img.resize((PRINT_WIDTH, int(img.height * PRINT_WIDTH / img.width)))
         if img.mode != "1":
             img = img.convert("1")
 
@@ -204,7 +276,8 @@ if __name__ == "__main__":
         if not await printer.connect():
             print("Failed to connect.")
             sys.exit(1)
-        print(f"Connected. Printing {img.width}x{img.height} image...")
+        print(f"Connected to {printer._device_name} ({printer.profile.name}, {printer.profile.print_width} dots/line)")
+        print(f"Printing {img.width}x{img.height} image...")
         success = await printer.print_image(img)
         print("Success!" if success else "Print failed.")
         await printer.disconnect()

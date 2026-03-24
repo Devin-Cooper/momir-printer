@@ -99,7 +99,7 @@ async def print_card():
         art_bytes = await image_cache.get_image(last_rolled_card["name"], version="art_crop")
         if art_bytes:
             art = Image.open(io.BytesIO(art_bytes))
-    img = render_card(last_rolled_card, art_image=art)
+    img = render_card(last_rolled_card, art_image=art, print_width=printer.profile.print_width)
     success = await printer.print_image(img)
     if not success:
         raise HTTPException(status_code=500, detail="Print failed — check printer connection")
