@@ -1,0 +1,579 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Momir Printer</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: #1a1a2e; color: #eee; padding: 20px;
+    display: flex; flex-direction: column; align-items: center;
+    min-height: 100vh;
+  }
+  h1 { margin-bottom: 16px; font-size: 24px; }
+  .ios-warning {
+    background: #b91c1c; color: #fff; padding: 12px 20px;
+    border-radius: 8px; margin-bottom: 16px; text-align: center;
+    font-size: 14px; max-width: 500px; display: none;
+  }
+  .status {
+    display: flex; align-items: center; gap: 8px;
+    margin-bottom: 16px; font-size: 14px; color: #aaa;
+  }
+  .status-dot {
+    width: 10px; height: 10px; border-radius: 50%;
+    background: #666;
+  }
+  .status-dot.ready { background: #4ade80; }
+  .status-dot.connecting { background: #facc15; }
+  .status-dot.printing { background: #60a5fa; }
+  .status-dot.disconnected { background: #666; }
+  .connect-btn {
+    background: none; border: 1px solid #666; color: #aaa;
+    padding: 4px 12px; border-radius: 4px; cursor: pointer; font-size: 12px;
+  }
+  .connect-btn:hover { border-color: #aaa; color: #eee; }
+  .connect-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+  .loading { color: #666; font-size: 14px; margin-bottom: 16px; }
+  .mv-picker { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 20px; justify-content: center; max-width: 500px; }
+  .mv-btn {
+    width: 44px; height: 44px; border-radius: 8px;
+    border: 2px solid #333; background: #16213e; color: #eee;
+    font-size: 18px; font-weight: bold; cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    transition: all 0.15s;
+  }
+  .mv-btn:hover { border-color: #60a5fa; background: #1a3a5c; }
+  .mv-btn.selected { border-color: #60a5fa; background: #1e40af; }
+  .card-area {
+    display: flex; flex-direction: column; align-items: center;
+    gap: 16px; margin-bottom: 20px; min-height: 400px;
+  }
+  .card-img {
+    max-width: 350px; border-radius: 12px;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+  }
+  .card-name { font-size: 20px; font-weight: bold; }
+  .card-type { font-size: 14px; color: #aaa; }
+  .card-text { font-size: 13px; color: #ccc; max-width: 350px; text-align: center; line-height: 1.4; }
+  .card-pt { font-size: 18px; font-weight: bold; }
+  .actions { display: flex; gap: 12px; margin-bottom: 20px; }
+  .btn {
+    padding: 10px 24px; border-radius: 8px; border: none;
+    font-size: 16px; font-weight: bold; cursor: pointer;
+    transition: all 0.15s;
+  }
+  .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+  .btn-roll { background: #4ade80; color: #1a1a2e; }
+  .btn-roll:hover:not(:disabled) { background: #22c55e; }
+  .btn-print { background: #60a5fa; color: #1a1a2e; }
+  .btn-print:hover:not(:disabled) { background: #3b82f6; }
+  .toggles { display: flex; flex-wrap: wrap; gap: 20px; font-size: 14px; color: #aaa; justify-content: center; }
+  .toggle { display: flex; align-items: center; gap: 6px; cursor: pointer; }
+  .toggle input { cursor: pointer; }
+  .message { color: #facc15; font-size: 14px; margin-top: 8px; min-height: 20px; text-align: center; }
+</style>
+</head>
+<body>
+<h1>Momir Printer</h1>
+
+<div class="ios-warning" id="iosWarning">
+  Web Bluetooth is not supported on iOS. Use an Android phone or desktop Chrome to connect to the printer.
+</div>
+
+<div class="status">
+  <div class="status-dot disconnected" id="statusDot"></div>
+  <span id="statusText">Disconnected</span>
+  <button class="connect-btn" id="connectBtn" onclick="connectPrinter()">Connect</button>
+</div>
+
+<div class="loading" id="loading">Loading card database...</div>
+
+<div class="mv-picker" id="mvPicker"></div>
+
+<div class="card-area" id="cardArea">
+  <p style="color:#666; margin-top:100px;">Pick a mana value and roll</p>
+</div>
+
+<div class="actions">
+  <button class="btn btn-roll" id="rollBtn" onclick="roll()" disabled>Roll</button>
+  <button class="btn btn-print" id="printBtn" onclick="printCard()" disabled>Print</button>
+</div>
+
+<div class="toggles">
+  <label class="toggle">
+    <input type="checkbox" id="autoPrint" onchange="saveSettings()">
+    Auto-print
+  </label>
+  <label class="toggle">
+    <input type="checkbox" id="includeFunny" onchange="saveSettings()">
+    Include Un-sets
+  </label>
+  <label class="toggle">
+    <input type="checkbox" id="printArt" onchange="saveSettings()" checked>
+    Print Art
+  </label>
+</div>
+
+<div class="message" id="message"></div>
+
+<script>
+// ============================================================
+// iOS Detection
+// ============================================================
+const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+              (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+
+if (isIOS) {
+  document.getElementById('iosWarning').style.display = 'block';
+  document.getElementById('connectBtn').disabled = true;
+}
+
+// ============================================================
+// Card Store
+// ============================================================
+let creaturesDB = null;
+
+async function loadCreatures() {
+  try {
+    const resp = await fetch('creatures.json');
+    creaturesDB = await resp.json();
+    document.getElementById('loading').style.display = 'none';
+    const total = Object.values(creaturesDB).reduce((s, arr) => s + arr.length, 0);
+    console.log(`Loaded ${total} creatures`);
+  } catch (e) {
+    document.getElementById('loading').textContent = 'Failed to load card database.';
+    console.error('Failed to load creatures.json:', e);
+  }
+}
+
+function getRandomCreature(mv, includeFunny) {
+  if (!creaturesDB) return null;
+  const bucket = creaturesDB[String(mv)] || [];
+  const filtered = includeFunny ? bucket : bucket.filter(c => !c.f);
+  if (filtered.length === 0) return null;
+  return filtered[Math.floor(Math.random() * filtered.length)];
+}
+
+// ============================================================
+// Scryfall Image URLs
+// ============================================================
+function scryfallImageUrl(name, version = 'normal') {
+  return `https://api.scryfall.com/cards/named?exact=${encodeURIComponent(name)}&format=image&version=${version}`;
+}
+
+// ============================================================
+// Settings (persisted in localStorage)
+// ============================================================
+function loadSettings() {
+  try {
+    const saved = JSON.parse(localStorage.getItem('momirSettings') || '{}');
+    document.getElementById('autoPrint').checked = saved.autoPrint || false;
+    document.getElementById('includeFunny').checked = saved.includeFunny || false;
+    document.getElementById('printArt').checked = saved.printArt !== false;
+  } catch (e) { /* ignore */ }
+}
+
+function saveSettings() {
+  localStorage.setItem('momirSettings', JSON.stringify({
+    autoPrint: document.getElementById('autoPrint').checked,
+    includeFunny: document.getElementById('includeFunny').checked,
+    printArt: document.getElementById('printArt').checked,
+  }));
+}
+
+// ============================================================
+// UI State
+// ============================================================
+let selectedMV = null;
+let printerState = 'disconnected';
+let currentCard = null;
+
+const picker = document.getElementById('mvPicker');
+for (let i = 0; i <= 16; i++) {
+  const btn = document.createElement('button');
+  btn.className = 'mv-btn';
+  btn.textContent = i;
+  btn.onclick = () => selectMV(i, btn);
+  picker.appendChild(btn);
+}
+
+function selectMV(mv, btn) {
+  selectedMV = mv;
+  document.querySelectorAll('.mv-btn').forEach(b => b.classList.remove('selected'));
+  btn.classList.add('selected');
+  document.getElementById('rollBtn').disabled = !creaturesDB;
+}
+
+function showMessage(msg) {
+  document.getElementById('message').textContent = msg;
+}
+
+function updatePrinterUI() {
+  const dot = document.getElementById('statusDot');
+  const text = document.getElementById('statusText');
+  dot.className = 'status-dot ' + printerState;
+  text.textContent = printerState.charAt(0).toUpperCase() + printerState.slice(1);
+  if (currentCard && !isIOS) {
+    document.getElementById('printBtn').disabled = (printerState !== 'ready');
+  }
+}
+
+function showCard(card) {
+  const area = document.getElementById('cardArea');
+  if (!card) {
+    area.innerHTML = '<p style="color:#666; margin-top:100px;">No creatures at this mana value</p>';
+    return;
+  }
+  const pt = (card.p && card.h) ? `${card.p} / ${card.h}` : '';
+  area.innerHTML = `
+    <img class="card-img" src="${scryfallImageUrl(card.n)}" alt="${card.n}"
+         onerror="this.style.display='none'" crossorigin="anonymous">
+    <div class="card-name">${card.n}</div>
+    <div class="card-type">${card.t}</div>
+    ${card.x ? `<div class="card-text">${card.x}</div>` : ''}
+    ${pt ? `<div class="card-pt">${pt}</div>` : ''}
+  `;
+}
+
+async function roll() {
+  if (selectedMV === null || !creaturesDB) return;
+  const rollBtn = document.getElementById('rollBtn');
+  rollBtn.disabled = true;
+  showMessage('Rolling...');
+
+  const creature = getRandomCreature(selectedMV, document.getElementById('includeFunny').checked);
+  if (!creature) {
+    showCard(null);
+    showMessage('No creatures at this mana value');
+    rollBtn.disabled = false;
+    return;
+  }
+
+  currentCard = creature;
+  showCard(creature);
+  showMessage('');
+
+  if (!isIOS) {
+    document.getElementById('printBtn').disabled = (printerState !== 'ready');
+  }
+
+  if (document.getElementById('autoPrint').checked && printerState === 'ready') {
+    await printCard();
+  }
+  rollBtn.disabled = false;
+}
+
+// ============================================================
+// Thermal Renderer (Canvas API)
+// ============================================================
+const PRINT_WIDTH = 576;
+const BYTES_PER_LINE = PRINT_WIDTH / 8; // 72
+const PADDING = 12;
+const CONTENT_WIDTH = PRINT_WIDTH - PADDING * 2;
+
+function measureTextLines(ctx, text, maxWidth) {
+  const words = text.split(' ');
+  const lines = [];
+  let currentLine = '';
+  for (const word of words) {
+    const test = currentLine ? currentLine + ' ' + word : word;
+    if (ctx.measureText(test).width <= maxWidth) {
+      currentLine = test;
+    } else {
+      if (currentLine) lines.push(currentLine);
+      currentLine = word;
+    }
+  }
+  if (currentLine) lines.push(currentLine);
+  return lines.length ? lines : [''];
+}
+
+function renderCardToCanvas(card, artImg) {
+  const measure = document.createElement('canvas');
+  const mctx = measure.getContext('2d');
+
+  const nameFont = 'bold 36px sans-serif';
+  const typeFont = '26px sans-serif';
+  const textFont = '24px sans-serif';
+  const ptFont = 'bold 34px sans-serif';
+
+  mctx.font = nameFont;
+  const nameH = 36 + 8;
+
+  let artH = 0;
+  if (artImg) {
+    const ratio = artImg.height / artImg.width;
+    artH = Math.round(PRINT_WIDTH * ratio);
+  }
+
+  mctx.font = typeFont;
+  const typeH = 26 + 6;
+
+  mctx.font = textFont;
+  let rulesH = 0;
+  let rulesLines = [];
+  if (card.x) {
+    const paragraphs = card.x.split('\n');
+    for (const para of paragraphs) {
+      rulesLines.push(...measureTextLines(mctx, para, CONTENT_WIDTH));
+    }
+    rulesH = (24 + 4) * rulesLines.length + 6 + 1 + 6;
+  }
+
+  let ptH = 0;
+  if (card.p && card.h) {
+    ptH = 34 + 8;
+  }
+
+  const totalHeight = PADDING
+    + nameH + 1 + 6
+    + (artH ? artH + 6 + 1 + 6 : 0)
+    + typeH + 1 + 6
+    + rulesH
+    + ptH
+    + PADDING;
+
+  const canvas = document.createElement('canvas');
+  canvas.width = PRINT_WIDTH;
+  canvas.height = totalHeight;
+  const ctx = canvas.getContext('2d');
+
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(0, 0, PRINT_WIDTH, totalHeight);
+  ctx.fillStyle = '#000';
+
+  let y = PADDING;
+
+  // Name + mana cost
+  ctx.font = nameFont;
+  const mana = card.m || '';
+  if (mana) {
+    const manaW = ctx.measureText(mana).width;
+    ctx.fillText(mana, PRINT_WIDTH - PADDING - manaW, y + 36);
+    const maxNameW = CONTENT_WIDTH - manaW - 12;
+    let displayName = card.n;
+    while (ctx.measureText(displayName).width > maxNameW && displayName.length > 1) {
+      displayName = displayName.slice(0, -1);
+    }
+    ctx.fillText(displayName, PADDING, y + 36);
+  } else {
+    ctx.fillText(card.n, PADDING, y + 36);
+  }
+  y += nameH;
+
+  // Rule
+  ctx.fillRect(PADDING, y, CONTENT_WIDTH, 1);
+  y += 1 + 6;
+
+  // Art
+  if (artImg) {
+    const ratio = artImg.height / artImg.width;
+    const ah = Math.round(PRINT_WIDTH * ratio);
+    ctx.drawImage(artImg, 0, y, PRINT_WIDTH, ah);
+    y += ah + 6;
+    ctx.fillRect(PADDING, y, CONTENT_WIDTH, 1);
+    y += 1 + 6;
+  }
+
+  // Type line
+  ctx.font = typeFont;
+  ctx.fillText(card.t, PADDING, y + 26);
+  y += typeH;
+
+  ctx.fillRect(PADDING, y, CONTENT_WIDTH, 1);
+  y += 1 + 6;
+
+  // Rules text
+  if (rulesLines.length > 0 && card.x) {
+    ctx.font = textFont;
+    for (const line of rulesLines) {
+      ctx.fillText(line, PADDING, y + 24);
+      y += 24 + 4;
+    }
+    y += 6;
+    ctx.fillRect(PADDING, y, CONTENT_WIDTH, 1);
+    y += 1 + 6;
+  }
+
+  // P/T
+  if (card.p && card.h) {
+    ctx.font = ptFont;
+    const ptStr = `${card.p} / ${card.h}`;
+    const ptW = ctx.measureText(ptStr).width;
+    ctx.fillText(ptStr, PRINT_WIDTH - PADDING - ptW, y + 34);
+  }
+
+  return canvas;
+}
+
+function canvasToPackedBytes(canvas) {
+  const ctx = canvas.getContext('2d');
+  const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  const pixels = imageData.data;
+
+  const result = new Uint8Array(BYTES_PER_LINE * canvas.height);
+  let idx = 0;
+
+  for (let y = 0; y < canvas.height; y++) {
+    for (let xByte = 0; xByte < BYTES_PER_LINE; xByte++) {
+      let byte = 0;
+      for (let bit = 0; bit < 8; bit++) {
+        const px = (y * canvas.width + xByte * 8 + bit) * 4;
+        const gray = 0.299 * pixels[px] + 0.587 * pixels[px + 1] + 0.114 * pixels[px + 2];
+        if (gray < 128) {
+          byte |= 1 << (7 - bit);
+        }
+      }
+      if (byte === 0x0a) byte = 0x14;
+      result[idx++] = byte;
+    }
+  }
+  return result;
+}
+
+// ============================================================
+// BLE Printer (Web Bluetooth)
+// ============================================================
+const SERVICE_UUID = '0000ff00-0000-1000-8000-00805f9b34fb';
+const WRITE_UUID = '0000ff02-0000-1000-8000-00805f9b34fb';
+const MAX_LINES_PER_BLOCK = 255;
+const CHUNK_SIZE = 512;
+const CHUNK_DELAY = 50;
+const POST_PRINT_DELAY = 2000;
+
+const CMD_INIT      = [0x1b, 0x40];
+const CMD_PROP_INIT = [0x1f, 0x11, 0x02, 0x04];
+const CMD_CENTER    = [0x1b, 0x61, 0x01];
+const CMD_PREAMBLE  = [0x1f, 0x11, 0x24, 0x00];
+const CMD_FEED      = [0x1b, 0x64, 0x02];
+const CMD_FIN1      = [0x1f, 0x11, 0x08];
+const CMD_FIN2      = [0x1f, 0x11, 0x0e];
+const CMD_FIN3      = [0x1f, 0x11, 0x07];
+const CMD_FIN4      = [0x1f, 0x11, 0x09];
+
+let bleDevice = null;
+let bleCharacteristic = null;
+let useWriteWithoutResponse = true;
+
+function buildPrintCommands(packedBytes, height) {
+  const commands = [];
+  commands.push(...CMD_INIT, ...CMD_PROP_INIT, ...CMD_CENTER, ...CMD_PREAMBLE);
+
+  let offset = 0;
+  while (offset < height) {
+    const lines = Math.min(MAX_LINES_PER_BLOCK, height - offset);
+    commands.push(0x1d, 0x76, 0x30, 0x00);
+    commands.push(BYTES_PER_LINE & 0xff, (BYTES_PER_LINE >> 8) & 0xff);
+    commands.push(lines & 0xff, (lines >> 8) & 0xff);
+    const start = offset * BYTES_PER_LINE;
+    const end = start + lines * BYTES_PER_LINE;
+    for (let i = start; i < end; i++) {
+      commands.push(packedBytes[i]);
+    }
+    offset += lines;
+  }
+
+  commands.push(...CMD_FEED, ...CMD_FEED);
+  commands.push(...CMD_FIN1, ...CMD_FIN2, ...CMD_FIN3, ...CMD_FIN4);
+  return new Uint8Array(commands);
+}
+
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+async function connectPrinter() {
+  if (isIOS) return;
+  showMessage('Connecting...');
+  printerState = 'connecting';
+  updatePrinterUI();
+
+  try {
+    bleDevice = await navigator.bluetooth.requestDevice({
+      filters: [{ services: [SERVICE_UUID] }]
+    });
+
+    bleDevice.addEventListener('gattserverdisconnected', () => {
+      printerState = 'disconnected';
+      bleCharacteristic = null;
+      updatePrinterUI();
+      showMessage('Printer disconnected');
+    });
+
+    const server = await bleDevice.gatt.connect();
+    const service = await server.getPrimaryService(SERVICE_UUID);
+    bleCharacteristic = await service.getCharacteristic(WRITE_UUID);
+    useWriteWithoutResponse = bleCharacteristic.properties.writeWithoutResponse;
+
+    printerState = 'ready';
+    updatePrinterUI();
+    showMessage('Connected!');
+  } catch (e) {
+    printerState = 'disconnected';
+    bleCharacteristic = null;
+    updatePrinterUI();
+    showMessage('Connection failed: ' + e.message);
+  }
+}
+
+async function sendData(data) {
+  for (let i = 0; i < data.length; i += CHUNK_SIZE) {
+    const chunk = data.slice(i, i + CHUNK_SIZE);
+    if (useWriteWithoutResponse) {
+      await bleCharacteristic.writeValueWithoutResponse(chunk);
+    } else {
+      await bleCharacteristic.writeValue(chunk);
+    }
+    await sleep(CHUNK_DELAY);
+  }
+}
+
+async function printCard() {
+  if (!currentCard || !bleCharacteristic) return;
+  if (printerState !== 'ready') return;
+
+  printerState = 'printing';
+  updatePrinterUI();
+  document.getElementById('printBtn').disabled = true;
+  showMessage('Printing...');
+
+  try {
+    let artImg = null;
+    if (document.getElementById('printArt').checked) {
+      try {
+        const artResp = await fetch(scryfallImageUrl(currentCard.n, 'art_crop'));
+        const artBlob = await artResp.blob();
+        artImg = await createImageBitmap(artBlob);
+      } catch (e) {
+        console.warn('Failed to fetch art:', e);
+      }
+    }
+
+    const canvas = renderCardToCanvas(currentCard, artImg);
+    const packed = canvasToPackedBytes(canvas);
+    const commands = buildPrintCommands(packed, canvas.height);
+    await sendData(commands);
+    await sleep(POST_PRINT_DELAY);
+
+    printerState = 'ready';
+    updatePrinterUI();
+    showMessage('Printed: ' + currentCard.n);
+  } catch (e) {
+    printerState = 'disconnected';
+    bleCharacteristic = null;
+    updatePrinterUI();
+    showMessage('Print failed: ' + e.message);
+  }
+}
+
+// ============================================================
+// Init
+// ============================================================
+loadSettings();
+loadCreatures();
+</script>
+</body>
+</html>
