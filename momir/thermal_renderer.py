@@ -99,8 +99,7 @@ def render_card(card: dict, art_image: Image.Image | None = None, print_width: i
         pt_height = pt_font.getbbox("Ay")[3] - pt_font.getbbox("Ay")[1]
         y += pt_height + 8
 
-    y += PADDING
-    total_height = y
+    total_height = y + 2  # minimal bottom margin — printer adds its own feed
 
     img = Image.new("L", (print_width, total_height), 255)
     draw = ImageDraw.Draw(img)

@@ -440,7 +440,7 @@ function renderCardToCanvas(card, artImg) {
     + typeH + 1 + 6
     + rulesH
     + ptH
-    + PADDING;
+    + 2;  // minimal bottom margin — printer adds its own feed
 
   const canvas = document.createElement('canvas');
   canvas.width = RENDER_WIDTH;
