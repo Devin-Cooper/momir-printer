@@ -53,15 +53,15 @@ PROFILE_M04S = PrinterProfile(
     name="M04S",
     print_width=1232,
     init_commands=(
-        b'\x1f\x11\x02\x04'  # density (default 0x04)
-        b'\x1f\x11\x37\x64'  # heat/speed (0x64 = 100)
-        b'\x1f\x11\x0b'      # required init
-        b'\x1f\x11\x35\x00'  # compression mode = raw
+        b'\x1f\x11\x02\x04'  # density = 4 (normal)
+        b'\x1f\x11\x37\x96'  # heat/speed = 150 (matches density=4)
+        b'\x1f\x11\x0b'      # continuous media mode
+        b'\x1f\x11\x35\x00'  # compression = raw
     ),
-    finalize_commands=b'\x1f\x11\x08\x1f\x11\x0e\x1f\x11\x07\x1f\x11\x09',
-    chunk_size=512,
-    chunks_per_burst=3,   # M04S handles 3 chunks per burst
-    burst_delay=0.05,
+    finalize_commands=b'\x1b\x64\x01',  # single short paper feed
+    chunk_size=205,           # confirmed by BTSnoop — must be ≤244 (MTU-3)
+    chunks_per_burst=3,       # confirmed by BTSnoop
+    burst_delay=0.05,         # 50ms between bursts
 )
 
 DEFAULT_PROFILE = PROFILE_M02S
