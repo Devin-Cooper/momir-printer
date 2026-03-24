@@ -434,13 +434,11 @@ function renderCardToCanvas(card, artImg) {
     ptH = 34 + 8;
   }
 
-  const totalHeight = PADDING
-    + nameH + 1 + 6
+  const totalHeight = nameH + 1 + 6
     + (artH ? artH + 6 + 1 + 6 : 0)
     + typeH + 1 + 6
     + rulesH
-    + ptH
-    + 2;  // minimal bottom margin — printer adds its own feed
+    + ptH;
 
   const canvas = document.createElement('canvas');
   canvas.width = RENDER_WIDTH;
@@ -451,7 +449,7 @@ function renderCardToCanvas(card, artImg) {
   ctx.fillRect(0, 0, RENDER_WIDTH, totalHeight);
   ctx.fillStyle = '#000';
 
-  let y = PADDING;
+  let y = 0;
 
   // Name + mana cost
   ctx.font = nameFont;
