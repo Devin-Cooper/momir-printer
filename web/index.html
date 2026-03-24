@@ -665,6 +665,7 @@ async function connectPrinter() {
     bleDevice = await navigator.bluetooth.requestDevice({
       filters: [
         { namePrefix: 'Mr.in_' },
+        { namePrefix: 'M04' },
         { namePrefix: 'M02' },
         { namePrefix: 'T02' },
       ],
