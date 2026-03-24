@@ -595,7 +595,7 @@ const POST_PRINT_DELAY = 2000;
 const SEND_PROFILES = {
   M02:  { chunkSize: 512, chunksPerBurst: 1, burstDelay: 50 },
   M02S: { chunkSize: 512, chunksPerBurst: 2, burstDelay: 50 },
-  M04S: { chunkSize: 512, chunksPerBurst: 3, burstDelay: 50 },
+  M04S: { chunkSize: 205, chunksPerBurst: 3, burstDelay: 50 },
 };
 let activeSendProfile = SEND_PROFILES.M02S;
 
@@ -604,7 +604,8 @@ const CMD_FIN  = [0x1f, 0x11, 0x08, 0x1f, 0x11, 0x0e, 0x1f, 0x11, 0x07, 0x1f, 0x
 
 // Init commands per printer family
 const INIT_M02 = [0x1b, 0x40, 0x1f, 0x11, 0x02, 0x04, 0x1b, 0x61, 0x01, 0x1f, 0x11, 0x24, 0x00];
-const INIT_M04 = [0x1f, 0x11, 0x02, 0x04, 0x1f, 0x11, 0x37, 0x64, 0x1f, 0x11, 0x0b, 0x1f, 0x11, 0x35, 0x00];
+const INIT_M04 = [0x1f, 0x11, 0x02, 0x04, 0x1f, 0x11, 0x37, 0x96, 0x1f, 0x11, 0x0b, 0x1f, 0x11, 0x35, 0x00];
+const FIN_M04  = [0x1b, 0x64, 0x01];
 
 let bleDevice = null;
 let bleCharacteristic = null;
@@ -617,6 +618,7 @@ function detectPrinterProfile(deviceName) {
   if (name.includes('M04')) {
     activePrintWidth = 1232;
     activeInitCmds = INIT_M04;
+    activeFinCmds = FIN_M04;
     activeSendProfile = SEND_PROFILES.M04S;
     return 'M04S';
   }
