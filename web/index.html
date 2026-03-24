@@ -74,9 +74,90 @@
   .toggle { display: flex; align-items: center; gap: 6px; cursor: pointer; }
   .toggle input { cursor: pointer; }
   .message { color: #facc15; font-size: 14px; margin-top: 8px; min-height: 20px; text-align: center; }
+  .info-btn {
+    position: fixed; top: 16px; right: 16px;
+    width: 36px; height: 36px; border-radius: 50%;
+    background: #16213e; border: 2px solid #333; color: #aaa;
+    font-size: 18px; font-weight: bold; cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    z-index: 1000; transition: all 0.15s;
+  }
+  .info-btn:hover { border-color: #60a5fa; color: #eee; }
+  .info-panel {
+    position: fixed; top: 0; right: -360px;
+    width: 340px; max-width: 85vw; height: 100vh;
+    background: #16213e; border-left: 1px solid #333;
+    padding: 20px; overflow-y: auto; z-index: 999;
+    transition: right 0.25s ease;
+  }
+  .info-panel.open { right: 0; }
+  .info-overlay {
+    position: fixed; top: 0; left: 0;
+    width: 100vw; height: 100vh;
+    background: rgba(0,0,0,0.5);
+    z-index: 998; display: none;
+  }
+  .info-overlay.open { display: block; }
+  .info-panel h2 { font-size: 18px; margin-bottom: 16px; color: #eee; }
+  .info-panel h3 { font-size: 15px; margin: 16px 0 8px; color: #60a5fa; }
+  .info-panel p, .info-panel li {
+    font-size: 13px; color: #ccc; line-height: 1.5; margin-bottom: 8px;
+  }
+  .info-panel ul { padding-left: 18px; margin-bottom: 12px; }
+  .info-panel a { color: #60a5fa; text-decoration: none; }
+  .info-panel a:hover { text-decoration: underline; }
+  .info-close {
+    position: absolute; top: 12px; right: 12px;
+    background: none; border: none; color: #aaa; font-size: 22px;
+    cursor: pointer; padding: 4px 8px;
+  }
+  .info-close:hover { color: #eee; }
 </style>
 </head>
 <body>
+<button class="info-btn" onclick="toggleInfo()">?</button>
+<div class="info-overlay" id="infoOverlay" onclick="toggleInfo()"></div>
+<div class="info-panel" id="infoPanel">
+  <button class="info-close" onclick="toggleInfo()">&times;</button>
+  <h2>Momir Printer</h2>
+  <p>Pick a mana value, roll a random creature, and print it on a thermal printer — just like the <a href="https://mtg.fandom.com/wiki/Momir" target="_blank">Momir</a> format from Magic: The Gathering Online.</p>
+
+  <h3>How to Use</h3>
+  <ul>
+    <li>Turn on your Phomemo printer</li>
+    <li>Click <strong>Connect</strong> and select your printer from the browser's Bluetooth picker</li>
+    <li>Pick a mana value (0–16) and hit <strong>Roll</strong></li>
+    <li>Click <strong>Print</strong> to send the card to your printer</li>
+  </ul>
+
+  <h3>Settings</h3>
+  <ul>
+    <li><strong>Auto-print</strong> — prints automatically after each roll</li>
+    <li><strong>Include Un-sets</strong> — adds silver-bordered/funny cards to the pool</li>
+    <li><strong>Print Art</strong> — includes dithered card artwork on the printout</li>
+    <li><strong>Hide Preview</strong> — hides the card on screen for a surprise print</li>
+  </ul>
+
+  <h3>Supported Printers</h3>
+  <ul>
+    <li>Phomemo M02 (384 dots, 48mm)</li>
+    <li>Phomemo M02S (576 dots, 53mm)</li>
+    <li>Phomemo M02 Pro (576 dots, 53mm)</li>
+    <li>Phomemo T02 (384 dots, 48mm)</li>
+  </ul>
+
+  <h3>Browser Support</h3>
+  <p>Requires Web Bluetooth — works in Chrome and Edge on Android and desktop. <strong>Not supported on iOS</strong> (Apple does not allow Web Bluetooth on any iOS browser).</p>
+
+  <h3>Links</h3>
+  <ul>
+    <li><a href="https://github.com/Devin-Cooper/momir-printer" target="_blank">GitHub</a></li>
+    <li><a href="https://mtg.fandom.com/wiki/Momir" target="_blank">Momir Format Rules</a></li>
+    <li><a href="https://mtgjson.com" target="_blank">MTGJSON</a> (card data)</li>
+    <li><a href="https://scryfall.com" target="_blank">Scryfall</a> (card images)</li>
+  </ul>
+</div>
+
 <h1>Momir Printer</h1>
 
 <div class="ios-warning" id="iosWarning">
@@ -124,6 +205,14 @@
 <div class="message" id="message"></div>
 
 <script>
+// ============================================================
+// Info Panel
+// ============================================================
+function toggleInfo() {
+  document.getElementById('infoPanel').classList.toggle('open');
+  document.getElementById('infoOverlay').classList.toggle('open');
+}
+
 // ============================================================
 // iOS Detection
 // ============================================================
