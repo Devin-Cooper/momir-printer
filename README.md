@@ -1,27 +1,65 @@
 # Momir Printer
 
-A local app that randomly selects a Magic: The Gathering creature by mana value ([Momir format](https://mtg.fandom.com/wiki/Momir)) and prints it on a Phomemo M02S thermal printer via Bluetooth Low Energy.
+A [Momir format](https://mtg.fandom.com/wiki/Momir) MTG creature printer — pick a mana value, get a random creature, and print it on a thermal printer via Bluetooth.
+
+**Try it now: [momir.io](https://momir.io)** (Chrome/Edge on Android or desktop)
 
 ## How It Works
 
 1. Pick a mana value (0–16)
 2. Roll to get a random creature at that mana value
-3. See the full card image preview in your browser
-4. Print the card on thermal paper — art + card info in a readable layout
+3. See the full card image preview in your browser (or hide it for a surprise)
+4. Print the card on thermal paper — dithered art + card info in a readable layout
 
-## Hardware
+## Supported Printers
 
-- **Phomemo M02S** thermal printer (576 dots/line, 53mm paper)
-- Connects via Bluetooth Low Energy (BLE)
-- Pair the printer in macOS Bluetooth settings first (code: `0000` or `1234`)
+Any Phomemo M02-family thermal printer with BLE:
 
-## Setup
+- **M02** (384 dots/line, 48mm paper)
+- **M02S** (576 dots/line, 53mm paper)
+- **M02 Pro** (576 dots/line, 53mm paper)
+- **T02** (384 dots/line, 48mm paper)
+
+Connect via Bluetooth Low Energy. Pair in your OS Bluetooth settings first (code: `0000` or `1234`).
+
+## Web App (momir.io)
+
+The primary version — runs entirely in your browser, no server needed.
+
+**Live at [https://momir.io](https://momir.io)**
+
+### Browser Support
+
+- Chrome/Edge on **Android** and **desktop** (macOS, Windows, Linux)
+- **Not supported on iOS** — Web Bluetooth is unavailable on any iOS browser (Apple restriction)
+
+### Settings
+
+- **Auto-print** — automatically print after each roll
+- **Include Un-sets** — include silver-bordered/funny cards in the pool
+- **Print Art** — include dithered card artwork on the thermal print
+- **Hide Preview** — don't show the card on screen before printing (for the surprise factor)
+
+### Run Locally
 
 ```bash
-# Clone and enter the project
-cd momir-printer
+# Build the card database (requires AtomicCards.json from MTGJSON)
+python scripts/build_creatures.py
 
-# Create venv and install
+# Serve
+cd web && python3 -m http.server 8080
+```
+
+Open http://localhost:8080 in Chrome.
+
+## Python Desktop App
+
+A FastAPI-based version that runs on localhost for desktop use.
+
+### Setup
+
+```bash
+cd momir-printer
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"
@@ -34,22 +72,14 @@ brew install --cask font-dejavu
 
 Download `AtomicCards.json` from [MTGJSON](https://mtgjson.com/downloads/all-files/) and place it at `~/Downloads/AtomicCards.json`.
 
-## Usage
-
-### Run the Web App
+### Run
 
 ```bash
 source .venv/bin/activate
 python -m momir.server
 ```
 
-Open http://localhost:8000 in your browser. Click **Connect** to pair with the printer, pick a mana value, and hit **Roll**.
-
-### Settings
-
-- **Auto-print** — automatically print after each roll
-- **Include Un-sets** — include silver-bordered/funny cards in the pool
-- **Print Art** — include card artwork on the thermal print (fetched from Scryfall)
+Open http://localhost:8000 in your browser.
 
 ### CLI Tools
 
@@ -74,14 +104,14 @@ python -m momir.ble_printer debug_output.png --dry-run output.bin
 ## Architecture
 
 ```
-Browser Frontend (localhost:8000)
-  │ REST API
-FastAPI Server
-  │
-  ├── Card Store        AtomicCards.json → indexed by mana value (18,000+ creatures)
-  ├── Image Cache       Scryfall card images → disk cache (~/.cache/momir-printer/)
-  ├── Thermal Renderer  Card data + art → 576px 1-bit bitmap
-  └── BLE Printer       Bitmap → ESC/POS commands → Phomemo M02S via BLE
+momir.io (static web app)              Python desktop app
+  │ no server                            │ REST API
+  │                                    FastAPI Server
+  │                                      │
+  ├── Card Store (creatures.json)        ├── Card Store (AtomicCards.json)
+  ├── Scryfall (browser fetch)           ├── Image Cache (disk cache)
+  ├── Thermal Renderer (Canvas API)      ├── Thermal Renderer (Pillow)
+  └── BLE Printer (Web Bluetooth)        └── BLE Printer (bleak)
 ```
 
 ## Thermal Print Layout
@@ -101,7 +131,7 @@ FastAPI Server
 └──────────────────────────────┘
 ```
 
-## API Endpoints
+## API Endpoints (Python version)
 
 | Method | Path | Purpose |
 |--------|------|---------|
@@ -122,37 +152,11 @@ python -m pytest tests/ -v
 
 ## Tech Stack
 
-- **Python** (FastAPI, Pillow, bleak, httpx)
-- **MTGJSON** AtomicCards.json for card data
-- **Scryfall API** for card images
-- **Phomemo M02S** ESC/POS protocol over BLE
-
-## Web App
-
-A standalone browser version that works on Android phones and desktop Chrome — no server needed.
-
-### Build the card database
-
-```bash
-python scripts/build_creatures.py
-```
-
-### Serve locally
-
-```bash
-cd web && python3 -m http.server 8080
-```
-
-Open http://localhost:8080 in Chrome.
-
-### Browser Support
-
-- Chrome/Edge on Android and desktop
-- **Not supported on iOS** (Web Bluetooth unavailable on any iOS browser)
-
-### Deploy
-
-The `web/` directory is fully static — deploy to GitHub Pages, Netlify, or any static host. Just make sure `creatures.json` is in the same directory as `index.html`.
+- **Web app**: HTML/CSS/JS, Web Bluetooth API, Canvas API
+- **Python app**: FastAPI, Pillow, bleak, httpx
+- **Card data**: [MTGJSON](https://mtgjson.com) AtomicCards.json (18,000+ creatures)
+- **Card images**: [Scryfall API](https://scryfall.com/docs/api)
+- **Printer protocol**: Phomemo ESC/POS over BLE (service `FF00`, write `FF02`)
 
 ## License
 
