@@ -438,7 +438,8 @@ function renderCardToCanvas(card, artImg) {
     + (artH ? artH + 6 + 1 + 6 : 0)
     + typeH + 1 + 6
     + rulesH
-    + ptH;
+    + ptH
+    + 4;
 
   const canvas = document.createElement('canvas');
   canvas.width = RENDER_WIDTH;
