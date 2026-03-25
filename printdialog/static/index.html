@@ -1,0 +1,334 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Phomemo Print Dialog</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: #1a1a2e; color: #eee;
+    display: flex; flex-direction: column; height: 100vh;
+  }
+  .topbar {
+    display: flex; align-items: center; gap: 12px;
+    padding: 12px 20px; background: #16213e; border-bottom: 1px solid #333;
+    font-size: 14px;
+  }
+  .topbar h1 { font-size: 18px; margin-right: auto; }
+  .status-dot {
+    width: 10px; height: 10px; border-radius: 50%; background: #666;
+  }
+  .status-dot.ready { background: #4ade80; }
+  .status-dot.connecting { background: #facc15; }
+  .status-dot.printing { background: #60a5fa; }
+  .connect-btn, .file-btn {
+    background: none; border: 1px solid #666; color: #aaa;
+    padding: 4px 12px; border-radius: 4px; cursor: pointer; font-size: 12px;
+  }
+  .connect-btn:hover, .file-btn:hover { border-color: #aaa; color: #eee; }
+  .main { display: flex; flex: 1; overflow: hidden; }
+  .preview-area {
+    flex: 1; display: flex; flex-direction: column; align-items: center;
+    justify-content: center; overflow: auto; padding: 20px; position: relative;
+  }
+  .preview-area img {
+    max-width: 100%; max-height: 100%; image-rendering: pixelated;
+    border: 1px solid #333;
+  }
+  .drop-overlay {
+    position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+    background: rgba(96, 165, 250, 0.2); border: 3px dashed #60a5fa;
+    display: none; align-items: center; justify-content: center;
+    font-size: 24px; color: #60a5fa; z-index: 100;
+  }
+  .drop-overlay.active { display: flex; }
+  .drop-prompt { color: #666; text-align: center; }
+  .drop-prompt p { margin-bottom: 12px; }
+  .sidebar {
+    width: 280px; background: #16213e; border-left: 1px solid #333;
+    padding: 16px; overflow-y: auto; display: flex; flex-direction: column; gap: 16px;
+  }
+  .sidebar h3 { font-size: 14px; color: #60a5fa; margin-bottom: 4px; }
+  .setting { display: flex; flex-direction: column; gap: 4px; }
+  .setting label { font-size: 12px; color: #aaa; }
+  .setting input[type=range] { width: 100%; }
+  .setting select, .setting input[type=checkbox] { cursor: pointer; }
+  .radio-group { display: flex; gap: 12px; font-size: 12px; color: #ccc; }
+  .radio-group label { display: flex; align-items: center; gap: 4px; cursor: pointer; }
+  .value-display { font-size: 11px; color: #666; text-align: right; }
+  .density-note { font-size: 10px; color: #666; font-style: italic; }
+  .print-btn {
+    padding: 10px; border-radius: 8px; border: none;
+    background: #60a5fa; color: #1a1a2e; font-size: 16px;
+    font-weight: bold; cursor: pointer; margin-top: auto;
+  }
+  .print-btn:hover:not(:disabled) { background: #3b82f6; }
+  .print-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+  .page-picker {
+    display: none; gap: 6px; padding: 8px 20px;
+    background: #16213e; border-top: 1px solid #333;
+    overflow-x: auto;
+  }
+  .page-picker.visible { display: flex; }
+  .page-thumb {
+    width: 60px; height: 80px; object-fit: cover;
+    border: 2px solid #333; border-radius: 4px; cursor: pointer;
+  }
+  .page-thumb.selected { border-color: #60a5fa; }
+  .message { font-size: 12px; color: #facc15; text-align: center; min-height: 16px; padding: 4px; }
+</style>
+</head>
+<body>
+
+<div class="drop-overlay" id="dropOverlay">Drop file here</div>
+
+<div class="topbar">
+  <h1>Print Dialog</h1>
+  <button class="file-btn" onclick="document.getElementById('fileInput').click()">Open File</button>
+  <input type="file" id="fileInput" accept="image/*,.pdf" style="display:none" onchange="handleFile(this.files[0])">
+  <div class="status-dot" id="statusDot"></div>
+  <span id="statusText" style="font-size:12px;color:#aaa;">Disconnected</span>
+  <button class="connect-btn" onclick="connectPrinter()">Connect</button>
+</div>
+
+<div class="main">
+  <div class="preview-area" id="previewArea">
+    <div class="drop-prompt" id="dropPrompt">
+      <p>Drag & drop an image or PDF here</p>
+      <p style="font-size:13px;">or click "Open File" above</p>
+    </div>
+    <img id="previewImg" style="display:none;">
+  </div>
+
+  <div class="sidebar">
+    <div class="setting">
+      <h3>Scale</h3>
+      <label><input type="checkbox" id="fitToWidth" checked onchange="updatePreview()"> Fit to width</label>
+      <input type="range" id="scaleSlider" min="10" max="200" value="100" oninput="updatePreview()" disabled>
+      <div class="value-display" id="scaleValue">100%</div>
+    </div>
+
+    <div class="setting">
+      <h3>Density <span class="density-note" id="densityNote"></span></h3>
+      <input type="range" id="densitySlider" min="1" max="15" value="4" oninput="updatePreview()">
+      <div class="value-display" id="densityValue">4</div>
+    </div>
+
+    <div class="setting">
+      <h3>Orientation</h3>
+      <div class="radio-group">
+        <label><input type="radio" name="orientation" value="auto" checked onchange="updatePreview()"> Auto</label>
+        <label><input type="radio" name="orientation" value="portrait" onchange="updatePreview()"> Portrait</label>
+        <label><input type="radio" name="orientation" value="landscape" onchange="updatePreview()"> Landscape</label>
+      </div>
+    </div>
+
+    <div class="setting">
+      <h3>Dithering</h3>
+      <select id="ditherSelect" onchange="updatePreview()">
+        <option value="floyd-steinberg">Floyd-Steinberg</option>
+        <option value="threshold">Threshold</option>
+      </select>
+    </div>
+
+    <div class="setting">
+      <label><input type="checkbox" id="invertCheck" onchange="updatePreview()"> Invert</label>
+    </div>
+
+    <div class="setting">
+      <h3>Paper Feed</h3>
+      <div class="radio-group">
+        <label><input type="radio" name="feed" value="none"> None</label>
+        <label><input type="radio" name="feed" value="single" checked> Single</label>
+        <label><input type="radio" name="feed" value="double"> Double</label>
+      </div>
+    </div>
+
+    <div class="message" id="message"></div>
+    <button class="print-btn" id="printBtn" onclick="printFile()" disabled>Print</button>
+  </div>
+</div>
+
+<div class="page-picker" id="pagePicker"></div>
+
+<script>
+let printerState = 'disconnected';
+let printWidth = 576;
+let hasFile = false;
+let selectedPage = 0;
+let previewTimeout = null;
+
+// --- Drag and drop (whole page) ---
+const dropOverlay = document.getElementById('dropOverlay');
+document.addEventListener('dragover', e => { e.preventDefault(); dropOverlay.classList.add('active'); });
+document.addEventListener('dragleave', e => {
+  if (e.relatedTarget === null) dropOverlay.classList.remove('active');
+});
+document.addEventListener('drop', e => {
+  e.preventDefault();
+  dropOverlay.classList.remove('active');
+  if (e.dataTransfer.files.length) handleFile(e.dataTransfer.files[0]);
+});
+
+// --- File upload ---
+async function handleFile(file) {
+  if (!file) return;
+  showMessage('Uploading...');
+  const form = new FormData();
+  form.append('file', file);
+  try {
+    const resp = await fetch('/upload', { method: 'POST', body: form });
+    const data = await resp.json();
+    hasFile = true;
+    selectedPage = 0;
+    document.getElementById('dropPrompt').style.display = 'none';
+
+    const picker = document.getElementById('pagePicker');
+    if (data.page_count > 1) {
+      picker.classList.add('visible');
+      picker.innerHTML = '';
+      for (const p of data.pages) {
+        const img = document.createElement('img');
+        img.className = 'page-thumb' + (p.page === 0 ? ' selected' : '');
+        img.src = p.thumbnail_url;
+        img.onclick = () => selectPage(p.page);
+        picker.appendChild(img);
+      }
+    } else {
+      picker.classList.remove('visible');
+    }
+
+    showMessage('');
+    updatePreview();
+  } catch (e) {
+    showMessage('Upload failed: ' + e.message);
+  }
+}
+
+function selectPage(page) {
+  selectedPage = page;
+  document.querySelectorAll('.page-thumb').forEach((el, i) => {
+    el.classList.toggle('selected', i === page);
+  });
+  updatePreview();
+}
+
+// --- Settings ---
+function getSettings() {
+  const fitToWidth = document.getElementById('fitToWidth').checked;
+  document.getElementById('scaleSlider').disabled = fitToWidth;
+  const scale = parseInt(document.getElementById('scaleSlider').value);
+  document.getElementById('scaleValue').textContent = fitToWidth ? 'Fit' : scale + '%';
+  const density = parseInt(document.getElementById('densitySlider').value);
+  document.getElementById('densityValue').textContent = density;
+  return {
+    page: selectedPage,
+    scale: scale,
+    fit_to_width: fitToWidth,
+    density: density,
+    dither: document.getElementById('ditherSelect').value,
+    orientation: document.querySelector('input[name=orientation]:checked').value,
+    invert: document.getElementById('invertCheck').checked,
+    print_width: printWidth,
+  };
+}
+
+// --- Preview ---
+function updatePreview() {
+  if (!hasFile) return;
+  clearTimeout(previewTimeout);
+  previewTimeout = setTimeout(doPreview, 300);
+}
+
+async function doPreview() {
+  const settings = getSettings();
+  try {
+    const resp = await fetch('/preview', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(settings),
+    });
+    if (!resp.ok) return;
+    const blob = await resp.blob();
+    const url = URL.createObjectURL(blob);
+    const img = document.getElementById('previewImg');
+    img.onload = () => URL.revokeObjectURL(url);
+    img.src = url;
+    img.style.display = 'block';
+  } catch (e) {
+    showMessage('Preview failed: ' + e.message);
+  }
+  document.getElementById('printBtn').disabled = !(hasFile && printerState === 'ready');
+}
+
+// --- Print ---
+async function printFile() {
+  if (!hasFile) return;
+  const settings = getSettings();
+  settings.feed = document.querySelector('input[name=feed]:checked').value;
+  document.getElementById('printBtn').disabled = true;
+  showMessage('Printing...');
+  try {
+    const resp = await fetch('/print', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(settings),
+    });
+    const data = await resp.json();
+    showMessage(resp.ok ? 'Printed!' : 'Error: ' + data.detail);
+  } catch (e) {
+    showMessage('Print failed: ' + e.message);
+  }
+  document.getElementById('printBtn').disabled = !(hasFile && printerState === 'ready');
+}
+
+// --- Printer ---
+async function connectPrinter() {
+  showMessage('Connecting...');
+  try {
+    const resp = await fetch('/connect', { method: 'POST' });
+    const data = await resp.json();
+    if (data.connected) {
+      printWidth = data.print_width || 576;
+      showMessage('Connected: ' + data.model + ' (' + printWidth + ' dots)');
+      const note = document.getElementById('densityNote');
+      if (data.model && !data.model.toUpperCase().includes('M04')) {
+        note.textContent = '(M04S only)';
+      } else {
+        note.textContent = '';
+      }
+      updatePreview();
+    } else {
+      showMessage('Connection failed');
+    }
+    updateStatus();
+  } catch (e) {
+    showMessage('Connection error: ' + e.message);
+  }
+}
+
+async function updateStatus() {
+  try {
+    const resp = await fetch('/status');
+    const data = await resp.json();
+    printerState = data.state;
+    document.getElementById('statusDot').className = 'status-dot ' + printerState;
+    document.getElementById('statusText').textContent =
+      printerState.charAt(0).toUpperCase() + printerState.slice(1);
+    if (data.print_width) printWidth = data.print_width;
+    document.getElementById('printBtn').disabled = !(hasFile && printerState === 'ready');
+  } catch (e) { /* ignore */ }
+}
+
+function showMessage(msg) {
+  document.getElementById('message').textContent = msg;
+}
+
+// --- Init ---
+setInterval(updateStatus, 3000);
+updateStatus();
+</script>
+</body>
+</html>
