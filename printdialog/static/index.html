@@ -286,10 +286,15 @@ async function printFile() {
 
 // --- Printer ---
 async function connectPrinter() {
+  const btn = document.querySelector('.connect-btn');
+  btn.disabled = true;
+  printerState = 'connecting';
+  applyStatus();
   showMessage('Connecting...');
   try {
     const resp = await fetch('/connect', { method: 'POST' });
     const data = await resp.json();
+    printerState = data.state;
     if (data.connected) {
       printWidth = data.print_width || 576;
       showMessage('Connected: ' + data.model + ' (' + printWidth + ' dots)');
@@ -300,26 +305,39 @@ async function connectPrinter() {
         note.textContent = '';
       }
       updatePreview();
+    } else if (data.state === 'connecting') {
+      showMessage('Scan in progress...');
     } else {
       showMessage('Connection failed');
     }
-    updateStatus();
+    applyStatus();
   } catch (e) {
     showMessage('Connection error: ' + e.message);
+  } finally {
+    btn.disabled = false;
   }
+}
+
+function applyStatus() {
+  document.getElementById('statusDot').className = 'status-dot ' + printerState;
+  document.getElementById('statusText').textContent =
+    printerState.charAt(0).toUpperCase() + printerState.slice(1);
+  document.getElementById('printBtn').disabled = !(hasFile && printerState === 'ready');
 }
 
 async function updateStatus() {
   try {
-    const resp = await fetch('/status');
+    const controller = new AbortController();
+    const tid = setTimeout(() => controller.abort(), 2500);
+    const resp = await fetch('/status', { signal: controller.signal });
+    clearTimeout(tid);
     const data = await resp.json();
     printerState = data.state;
-    document.getElementById('statusDot').className = 'status-dot ' + printerState;
-    document.getElementById('statusText').textContent =
-      printerState.charAt(0).toUpperCase() + printerState.slice(1);
     if (data.print_width) printWidth = data.print_width;
-    document.getElementById('printBtn').disabled = !(hasFile && printerState === 'ready');
-  } catch (e) { /* ignore */ }
+  } catch (e) {
+    printerState = 'disconnected';
+  }
+  applyStatus();
 }
 
 function showMessage(msg) {

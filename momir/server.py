@@ -91,8 +91,12 @@ async def get_image(card_name: str):
 async def print_card():
     if last_rolled_card is None:
         raise HTTPException(status_code=400, detail="No card rolled yet")
+    if printer is None:
+        raise HTTPException(status_code=503, detail="Server not ready")
     if printer.state == PrinterState.PRINTING:
         raise HTTPException(status_code=409, detail="Already printing")
+    if printer.state != PrinterState.READY:
+        raise HTTPException(status_code=400, detail="Printer not connected")
     # Fetch art crop for the thermal print if enabled
     art = None
     if _settings["print_art"]:
@@ -108,11 +112,21 @@ async def print_card():
 
 @app.get("/status")
 async def status():
-    return {"state": printer.state.value if printer else "disconnected"}
+    if printer is None:
+        return {"state": "disconnected", "model": None, "print_width": None}
+    return {
+        "state": printer.state.value,
+        "model": printer.device_name if printer.state == PrinterState.READY else None,
+        "print_width": printer.profile.print_width if printer.state == PrinterState.READY else None,
+    }
 
 
 @app.post("/connect")
 async def connect():
+    if printer is None:
+        raise HTTPException(status_code=503, detail="Server not ready")
+    if printer.state == PrinterState.CONNECTING:
+        return {"connected": False, "state": "connecting"}
     success = await printer.connect()
     return {"connected": success, "state": printer.state.value}
 

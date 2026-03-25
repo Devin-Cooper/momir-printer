@@ -159,6 +159,26 @@ class BLEPrinter:
     def profile(self) -> PrinterProfile:
         return self._profile
 
+    @property
+    def device_name(self) -> str | None:
+        return self._device_name
+
+    def _on_disconnect(self, client) -> None:
+        """Callback fired by bleak when BLE link drops."""
+        self._state = PrinterState.DISCONNECTED
+        self._client = None
+
+    async def _cleanup_client(self):
+        """Best-effort disconnect and cleanup of the BLE client."""
+        client = self._client
+        self._client = None
+        if client is not None:
+            try:
+                if client.is_connected:
+                    await client.disconnect()
+            except Exception:
+                pass
+
     async def scan(self, timeout: float = 10.0) -> tuple[str, str] | None:
         """Scan for printer. Returns (address, name) or None."""
         if BleakScanner is None:
@@ -169,9 +189,22 @@ class BLEPrinter:
                 return (d.address, d.name)
         return None
 
-    async def connect(self, address: str | None = None) -> bool:
-        if self._state not in (PrinterState.DISCONNECTED,):
-            return self._state == PrinterState.READY
+    async def _connect_locked(self, address: str | None = None) -> bool:
+        """Internal connect — caller must hold self._lock."""
+        # Check for stale READY state
+        if self._state == PrinterState.READY:
+            if self._client and self._client.is_connected:
+                return True
+            # Stale — fall through to reconnect
+            self._state = PrinterState.DISCONNECTED
+            self._client = None
+        if self._state == PrinterState.CONNECTING:
+            return False
+        if self._state == PrinterState.PRINTING:
+            return False
+        if self._state != PrinterState.DISCONNECTED:
+            return False
+
         self._state = PrinterState.CONNECTING
         try:
             if address is None:
@@ -181,32 +214,51 @@ class BLEPrinter:
                     return False
                 address, self._device_name = result
             self._profile = detect_profile(self._device_name or "")
-            self._client = BleakClient(address)
+            self._client = BleakClient(address, disconnected_callback=self._on_disconnect)
             await self._client.connect()
             self._state = PrinterState.READY
             return True
         except Exception:
             self._state = PrinterState.DISCONNECTED
-            self._client = None
+            await self._cleanup_client()
             return False
 
+    async def connect(self, address: str | None = None) -> bool:
+        """Connect to the printer. Thread-safe — acquires lock."""
+        async with self._lock:
+            return await self._connect_locked(address)
+
     async def disconnect(self):
-        if self._client and self._client.is_connected:
-            await self._client.disconnect()
-        self._client = None
-        self._state = PrinterState.DISCONNECTED
+        """Disconnect from the printer. Thread-safe — acquires lock."""
+        async with self._lock:
+            await self._cleanup_client()
+            self._state = PrinterState.DISCONNECTED
+
+    async def _send_chunks(self, commands: bytes) -> None:
+        """Send command bytes in chunks with burst pacing. Caller must hold lock."""
+        chunk_size = self._profile.chunk_size
+        burst = self._profile.chunks_per_burst
+        delay = self._profile.burst_delay
+        chunks = [commands[i:i + chunk_size] for i in range(0, len(commands), chunk_size)]
+        for i, chunk in enumerate(chunks):
+            await self._client.write_gatt_char(WRITE_UUID, chunk, response=False)
+            if (i + 1) % burst == 0:
+                await asyncio.sleep(delay)
+        await asyncio.sleep(POST_PRINT_DELAY)
 
     async def print_image(self, img: Image.Image) -> bool:
         async with self._lock:
             if self._state != PrinterState.READY:
-                if not await self.connect():
+                if not await self._connect_locked():
                     return False
             self._state = PrinterState.PRINTING
             try:
+                # Ensure 1-bit mode before any transforms
+                if img.mode != "1":
+                    img = img.convert("1")
                 # For wide printers, rotate landscape and center
                 if self._profile.print_width > 576:
                     img = img.rotate(90, expand=True)
-                    # Center on wider paper
                     padded = Image.new("1", (self._profile.print_width, img.height), 1)
                     offset_x = (self._profile.print_width - img.width) // 2
                     padded.paste(img, (offset_x, 0))
@@ -218,48 +270,35 @@ class BLEPrinter:
                         img = img.convert("1")
 
                 commands = build_print_commands(img, self._profile)
-                chunk_size = self._profile.chunk_size
-                burst = self._profile.chunks_per_burst
-                delay = self._profile.burst_delay
-                chunks = [commands[i:i + chunk_size] for i in range(0, len(commands), chunk_size)]
-                for i, chunk in enumerate(chunks):
-                    await self._client.write_gatt_char(WRITE_UUID, chunk, response=False)
-                    if (i + 1) % burst == 0:
-                        await asyncio.sleep(delay)
-                await asyncio.sleep(POST_PRINT_DELAY)
+                await self._send_chunks(commands)
                 self._state = PrinterState.READY
                 return True
             except Exception:
+                await self._cleanup_client()
                 self._state = PrinterState.DISCONNECTED
-                self._client = None
                 return False
+            finally:
+                if self._state == PrinterState.PRINTING:
+                    self._state = PrinterState.DISCONNECTED
 
     async def send_raw_commands(self, commands: bytes) -> bool:
-        """Send pre-built command bytes via BLE with chunk/burst pacing.
-
-        Unlike print_image(), this does NO image processing — just sends bytes.
-        """
+        """Send pre-built command bytes via BLE with chunk/burst pacing."""
         async with self._lock:
             if self._state != PrinterState.READY:
-                if not await self.connect():
+                if not await self._connect_locked():
                     return False
             self._state = PrinterState.PRINTING
             try:
-                chunk_size = self._profile.chunk_size
-                burst = self._profile.chunks_per_burst
-                delay = self._profile.burst_delay
-                chunks = [commands[i:i + chunk_size] for i in range(0, len(commands), chunk_size)]
-                for i, chunk in enumerate(chunks):
-                    await self._client.write_gatt_char(WRITE_UUID, chunk, response=False)
-                    if (i + 1) % burst == 0:
-                        await asyncio.sleep(delay)
-                await asyncio.sleep(POST_PRINT_DELAY)
+                await self._send_chunks(commands)
                 self._state = PrinterState.READY
                 return True
             except Exception:
+                await self._cleanup_client()
                 self._state = PrinterState.DISCONNECTED
-                self._client = None
                 return False
+            finally:
+                if self._state == PrinterState.PRINTING:
+                    self._state = PrinterState.DISCONNECTED
 
 
 def write_dry_run(img: Image.Image, output_path: str, profile: PrinterProfile | None = None):

@@ -4,6 +4,7 @@ import hashlib
 import io
 import shutil
 import tempfile
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Response, UploadFile, File
@@ -17,13 +18,23 @@ from printdialog.renderer import (
     build_full_commands,
 )
 
-printer = BLEPrinter()
+printer: BLEPrinter | None = None
 _upload_dir = tempfile.mkdtemp(prefix="printdialog_")
 _current_file: str | None = None
 _current_ext: str | None = None
 _page_count: int = 1
 
-app = FastAPI(title="Phomemo Print Dialog")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    global printer
+    printer = BLEPrinter()
+    yield
+    if printer:
+        await printer.disconnect()
+
+
+app = FastAPI(title="Phomemo Print Dialog", lifespan=lifespan)
 
 
 class PreviewRequest(BaseModel):
@@ -142,20 +153,26 @@ async def print_file(req: PrintRequest):
 
 @app.get("/status")
 async def status():
+    if printer is None:
+        return {"state": "disconnected", "model": None, "print_width": None}
     return {
         "state": printer.state.value,
-        "model": printer._device_name if printer.state == PrinterState.READY else None,
+        "model": printer.device_name if printer.state == PrinterState.READY else None,
         "print_width": printer.profile.print_width if printer.state == PrinterState.READY else None,
     }
 
 
 @app.post("/connect")
 async def connect():
+    if printer is None:
+        raise HTTPException(status_code=503, detail="Server not ready")
+    if printer.state == PrinterState.CONNECTING:
+        return {"connected": False, "state": "connecting"}
     success = await printer.connect()
     return {
         "connected": success,
         "state": printer.state.value,
-        "model": printer._device_name,
+        "model": printer.device_name,
         "print_width": printer.profile.print_width,
     }
 
