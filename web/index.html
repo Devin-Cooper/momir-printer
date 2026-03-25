@@ -597,8 +597,7 @@ const SEND_PROFILES = {
 };
 let activeSendProfile = SEND_PROFILES.M02S;
 
-const CMD_FEED = [0x1b, 0x64, 0x02];
-const CMD_FIN  = [0x1f, 0x11, 0x08, 0x1f, 0x11, 0x0e, 0x1f, 0x11, 0x07, 0x1f, 0x11, 0x09];
+const CMD_FIN_M02 = [0x1b, 0x64, 0x02, 0x1b, 0x64, 0x02, 0x1f, 0x11, 0x08, 0x1f, 0x11, 0x0e, 0x1f, 0x11, 0x07, 0x1f, 0x11, 0x09];
 
 // Init commands per printer family
 const INIT_M02 = [0x1b, 0x40, 0x1f, 0x11, 0x02, 0x04, 0x1b, 0x61, 0x01, 0x1f, 0x11, 0x24, 0x00];
@@ -609,8 +608,9 @@ let bleDevice = null;
 let bleCharacteristic = null;
 let useWriteWithoutResponse = true;
 let activeInitCmds = INIT_M02;
-let activeFinCmds = CMD_FIN;
+let activeFinCmds = CMD_FIN_M02;
 
+// Remove unused CMD_FEED reference
 function detectPrinterProfile(deviceName) {
   const name = (deviceName || '').toUpperCase();
   if (name.includes('M04')) {
@@ -656,7 +656,6 @@ function buildPrintCommands(packedBytes, height, bytesPerLine, initCmds, finCmds
     offset += lines;
   }
 
-  commands.push(...CMD_FEED, ...CMD_FEED);
   commands.push(...finCmds);
   return new Uint8Array(commands);
 }

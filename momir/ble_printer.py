@@ -38,14 +38,14 @@ PROFILE_M02 = PrinterProfile(
     name="M02",
     print_width=384,
     init_commands=b'\x1b\x40\x1f\x11\x02\x04\x1b\x61\x01\x1f\x11\x24\x00',
-    finalize_commands=b'\x1f\x11\x08\x1f\x11\x0e\x1f\x11\x07\x1f\x11\x09',
+    finalize_commands=b'\x1b\x64\x02\x1b\x64\x02\x1f\x11\x08\x1f\x11\x0e\x1f\x11\x07\x1f\x11\x09',
 )
 
 PROFILE_M02S = PrinterProfile(
     name="M02S",
     print_width=576,
     init_commands=b'\x1b\x40\x1f\x11\x02\x04\x1b\x61\x01\x1f\x11\x24\x00',
-    finalize_commands=b'\x1f\x11\x08\x1f\x11\x0e\x1f\x11\x07\x1f\x11\x09',
+    finalize_commands=b'\x1b\x64\x02\x1b\x64\x02\x1f\x11\x08\x1f\x11\x0e\x1f\x11\x07\x1f\x11\x09',
     chunks_per_burst=2,
 )
 
@@ -127,8 +127,6 @@ def build_print_commands(img: Image.Image, profile: PrinterProfile | None = None
         commands.extend(bitmap[start:end])
         offset += lines
 
-    commands.extend(CMD_FEED)
-    commands.extend(CMD_FEED)
     commands.extend(profile.finalize_commands)
 
     return bytes(commands)
