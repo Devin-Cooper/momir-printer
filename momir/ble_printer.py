@@ -234,6 +234,33 @@ class BLEPrinter:
                 self._client = None
                 return False
 
+    async def send_raw_commands(self, commands: bytes) -> bool:
+        """Send pre-built command bytes via BLE with chunk/burst pacing.
+
+        Unlike print_image(), this does NO image processing — just sends bytes.
+        """
+        async with self._lock:
+            if self._state != PrinterState.READY:
+                if not await self.connect():
+                    return False
+            self._state = PrinterState.PRINTING
+            try:
+                chunk_size = self._profile.chunk_size
+                burst = self._profile.chunks_per_burst
+                delay = self._profile.burst_delay
+                chunks = [commands[i:i + chunk_size] for i in range(0, len(commands), chunk_size)]
+                for i, chunk in enumerate(chunks):
+                    await self._client.write_gatt_char(WRITE_UUID, chunk, response=False)
+                    if (i + 1) % burst == 0:
+                        await asyncio.sleep(delay)
+                await asyncio.sleep(POST_PRINT_DELAY)
+                self._state = PrinterState.READY
+                return True
+            except Exception:
+                self._state = PrinterState.DISCONNECTED
+                self._client = None
+                return False
+
 
 def write_dry_run(img: Image.Image, output_path: str, profile: PrinterProfile | None = None):
     commands = build_print_commands(img, profile)
