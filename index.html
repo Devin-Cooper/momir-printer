@@ -665,8 +665,17 @@ function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
+function onGattDisconnected() {
+  printerState = 'disconnected';
+  bleCharacteristic = null;
+  updatePrinterUI();
+  showMessage('Printer disconnected');
+}
+
 async function connectPrinter() {
   if (isIOS) return;
+  const btn = document.getElementById('connectBtn');
+  btn.disabled = true;
   showMessage('Connecting...');
   printerState = 'connecting';
   updatePrinterUI();
@@ -682,12 +691,11 @@ async function connectPrinter() {
       optionalServices: [SERVICE_UUID],
     });
 
-    bleDevice.addEventListener('gattserverdisconnected', () => {
-      printerState = 'disconnected';
-      bleCharacteristic = null;
-      updatePrinterUI();
-      showMessage('Printer disconnected');
-    });
+    // Attach disconnect listener once per device
+    if (!bleDevice._disconnectListenerAttached) {
+      bleDevice._disconnectListenerAttached = true;
+      bleDevice.addEventListener('gattserverdisconnected', onGattDisconnected);
+    }
 
     const server = await bleDevice.gatt.connect();
     const service = await server.getPrimaryService(SERVICE_UUID);
@@ -703,6 +711,8 @@ async function connectPrinter() {
     bleCharacteristic = null;
     updatePrinterUI();
     showMessage('Connection failed: ' + e.message);
+  } finally {
+    btn.disabled = false;
   }
 }
 
