@@ -145,6 +145,27 @@ momir.io (static web app)              Python desktop app
 
 Both versions auto-detect the connected printer model and select the appropriate profile (print width, init commands, BLE chunk parameters).
 
+## Print Dialog
+
+A general-purpose print utility for any image or PDF.
+
+```bash
+source .venv/bin/activate
+python -m printdialog.server
+```
+
+Open http://localhost:8001. Drag and drop an image or PDF, adjust settings, and print.
+
+### Print Settings
+
+- **Scale** — fit to width or 10–200%
+- **Density** — 1–15 (M04S only)
+- **Orientation** — auto, portrait, landscape
+- **Dithering** — Floyd-Steinberg (photos) or threshold (text/line art)
+- **Invert** — swap black/white
+- **Paper feed** — none, single, or double feed after print
+- **PDF page picker** — select individual pages from multi-page PDFs
+
 ## Thermal Print Layout
 
 ```
