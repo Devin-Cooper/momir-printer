@@ -99,7 +99,7 @@ def render_card(card: dict, art_image: Image.Image | None = None, print_width: i
         pt_height = pt_font.getbbox("Ay")[3] - pt_font.getbbox("Ay")[1]
         y += pt_height + 8
 
-    total_height = y + 4
+    total_height = y
 
     img = Image.new("L", (print_width, total_height), 255)
     draw = ImageDraw.Draw(img)
