@@ -515,7 +515,7 @@ function renderCardToCanvas(card, artImg) {
 }
 
 function prepareForPrinter(canvas, printerWidth) {
-  // For wide printers (M04S), rotate 90 degrees and center on paper
+  // For wide printers (M04S), rotate 90 degrees and top-align
   if (printerWidth > 576) {
     const rotated = document.createElement('canvas');
     rotated.width = printerWidth;
@@ -523,9 +523,8 @@ function prepareForPrinter(canvas, printerWidth) {
     const ctx = rotated.getContext('2d');
     ctx.fillStyle = '#fff';
     ctx.fillRect(0, 0, rotated.width, rotated.height);
-    // Center the rotated card on the wide paper
-    const offsetX = Math.floor((printerWidth - canvas.height) / 2);
-    ctx.translate(offsetX + canvas.height, 0);
+    // Top-align the rotated card for narrower paper compatibility
+    ctx.translate(canvas.height, 0);
     ctx.rotate(Math.PI / 2);
     ctx.drawImage(canvas, 0, 0);
     return rotated;
