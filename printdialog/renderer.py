@@ -43,11 +43,10 @@ def render(
         new_h = max(1, int(img.height * ratio))
         img = img.resize((target_w, new_h), Image.LANCZOS)
 
-    # 3. Ensure exactly print_width wide (pad or clip)
+    # 3. Ensure exactly print_width wide (pad/clip, top-aligned)
     if img.width != print_width:
         padded = Image.new("RGB" if img.mode == "RGB" else "L", (print_width, img.height), 255)
-        offset_x = (print_width - img.width) // 2
-        padded.paste(img, (max(0, offset_x), 0))
+        padded.paste(img, (0, 0))
         img = padded
 
     # 4. Grayscale
