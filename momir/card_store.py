@@ -35,7 +35,7 @@ class CardStore:
     @classmethod
     def from_file(cls, path: str | Path) -> "CardStore":
         """Load from an AtomicCards.json file on disk."""
-        with open(path) as f:
+        with open(path, encoding="utf-8-sig") as f:
             raw = json.load(f)
         return cls.from_dict(raw)
 

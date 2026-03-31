@@ -2,6 +2,7 @@
 
 import asyncio
 import struct
+from dataclasses import dataclass
 from enum import Enum
 from PIL import Image
 
@@ -141,6 +142,62 @@ except ImportError:
     BleakScanner = None
 
 POST_PRINT_DELAY = 2.0
+CONNECT_RETRY_DELAY = 0.65
+MAX_CONNECT_ATTEMPTS = 2
+MIN_WRITE_WITHOUT_RESPONSE = 20
+CONSERVATIVE_BURST_DELAY = 0.07
+CONSERVATIVE_INTER_CHUNK_DELAY = 0.012
+DEFAULT_INTER_CHUNK_DELAY = 0.008
+CONSERVATIVE_PROFILE_NAMES = {"M02", "M02S"}
+
+
+@dataclass(frozen=True)
+class TransferSettings:
+    chunk_size: int
+    chunks_per_burst: int
+    burst_delay: float
+    inter_chunk_delay: float
+
+
+def _coerce_payload_size(candidate: int | None) -> int | None:
+    if candidate is None or candidate <= 0:
+        return None
+    return max(candidate, MIN_WRITE_WITHOUT_RESPONSE)
+
+
+def _get_max_write_without_response_size(characteristic) -> int | None:
+    return _coerce_payload_size(getattr(characteristic, "max_write_without_response_size", None))
+
+
+def resolve_transfer_settings(
+    profile: PrinterProfile,
+    mtu_size: int | None = None,
+    max_write_without_response_size: int | None = None,
+) -> TransferSettings:
+    payload_candidates = []
+    if mtu_size is not None:
+        payload_candidates.append(_coerce_payload_size(mtu_size - 3))
+    if max_write_without_response_size is not None:
+        payload_candidates.append(_coerce_payload_size(max_write_without_response_size))
+    payload_candidates = [candidate for candidate in payload_candidates if candidate is not None]
+
+    link_payload = min(payload_candidates) if payload_candidates else profile.chunk_size
+    chunk_size = min(profile.chunk_size, link_payload)
+
+    if profile.name in CONSERVATIVE_PROFILE_NAMES:
+        return TransferSettings(
+            chunk_size=min(chunk_size, 205),
+            chunks_per_burst=1,
+            burst_delay=max(profile.burst_delay, CONSERVATIVE_BURST_DELAY),
+            inter_chunk_delay=CONSERVATIVE_INTER_CHUNK_DELAY,
+        )
+
+    return TransferSettings(
+        chunk_size=chunk_size,
+        chunks_per_burst=profile.chunks_per_burst,
+        burst_delay=profile.burst_delay,
+        inter_chunk_delay=DEFAULT_INTER_CHUNK_DELAY,
+    )
 
 
 class BLEPrinter:
@@ -150,6 +207,8 @@ class BLEPrinter:
         self._lock = asyncio.Lock()
         self._profile = DEFAULT_PROFILE
         self._device_name: str | None = None
+        self._write_char = None
+        self._last_error: str | None = None
 
     @property
     def state(self) -> PrinterState:
@@ -163,21 +222,33 @@ class BLEPrinter:
     def device_name(self) -> str | None:
         return self._device_name
 
+    @property
+    def last_error(self) -> str | None:
+        return self._last_error
+
     def _on_disconnect(self, client) -> None:
         """Callback fired by bleak when BLE link drops."""
         self._state = PrinterState.DISCONNECTED
         self._client = None
+        self._write_char = None
+        if self._last_error is None:
+            self._last_error = "GATT disconnected"
+
+    async def _disconnect_client(self, client) -> None:
+        if client is None:
+            return
+        try:
+            if client.is_connected:
+                await client.disconnect()
+        except Exception:
+            pass
 
     async def _cleanup_client(self):
         """Best-effort disconnect and cleanup of the BLE client."""
         client = self._client
         self._client = None
-        if client is not None:
-            try:
-                if client.is_connected:
-                    await client.disconnect()
-            except Exception:
-                pass
+        self._write_char = None
+        await self._disconnect_client(client)
 
     async def scan(self, timeout: float = 10.0) -> tuple[str, str] | None:
         """Scan for printer. Returns (address, name) or None."""
@@ -206,20 +277,39 @@ class BLEPrinter:
             return False
 
         self._state = PrinterState.CONNECTING
+        self._last_error = None
         try:
             if address is None:
                 result = await self.scan()
                 if result is None:
                     self._state = PrinterState.DISCONNECTED
+                    self._last_error = "No supported printer found"
                     return False
                 address, self._device_name = result
             self._profile = detect_profile(self._device_name or "")
-            self._client = BleakClient(address, disconnected_callback=self._on_disconnect)
-            await self._client.connect()
-            self._state = PrinterState.READY
-            return True
-        except Exception:
+            for attempt in range(1, MAX_CONNECT_ATTEMPTS + 1):
+                client = BleakClient(address, disconnected_callback=self._on_disconnect)
+                try:
+                    await client.connect()
+                    services = client.services
+                    write_char = services.get_characteristic(WRITE_UUID) if services is not None else None
+                    if write_char is None:
+                        raise RuntimeError("Printer write characteristic not found")
+                    self._client = client
+                    self._write_char = write_char
+                    self._state = PrinterState.READY
+                    self._last_error = None
+                    return True
+                except Exception as exc:
+                    self._last_error = str(exc) or exc.__class__.__name__
+                    self._state = PrinterState.DISCONNECTED
+                    await self._disconnect_client(client)
+                    if attempt < MAX_CONNECT_ATTEMPTS:
+                        await asyncio.sleep(CONNECT_RETRY_DELAY)
+            return False
+        except Exception as exc:
             self._state = PrinterState.DISCONNECTED
+            self._last_error = str(exc) or exc.__class__.__name__
             await self._cleanup_client()
             return False
 
@@ -236,14 +326,23 @@ class BLEPrinter:
 
     async def _send_chunks(self, commands: bytes) -> None:
         """Send command bytes in chunks with burst pacing. Caller must hold lock."""
-        chunk_size = self._profile.chunk_size
-        burst = self._profile.chunks_per_burst
-        delay = self._profile.burst_delay
+        settings = resolve_transfer_settings(
+            self._profile,
+            mtu_size=getattr(self._client, "mtu_size", None),
+            max_write_without_response_size=_get_max_write_without_response_size(self._write_char),
+        )
+        write_target = self._write_char or WRITE_UUID
+        chunk_size = settings.chunk_size
+        burst = settings.chunks_per_burst
+        delay = settings.burst_delay
         chunks = [commands[i:i + chunk_size] for i in range(0, len(commands), chunk_size)]
         for i, chunk in enumerate(chunks):
-            await self._client.write_gatt_char(WRITE_UUID, chunk, response=False)
+            if self._state == PrinterState.DISCONNECTED or self._client is None or not self._client.is_connected:
+                raise RuntimeError(self._last_error or "Disconnected during BLE transfer")
+            await self._client.write_gatt_char(write_target, chunk, response=False)
             if (i + 1) % burst == 0:
                 await asyncio.sleep(delay)
+            await asyncio.sleep(settings.inter_chunk_delay)
         await asyncio.sleep(POST_PRINT_DELAY)
 
     async def print_image(self, img: Image.Image) -> bool:
@@ -271,8 +370,10 @@ class BLEPrinter:
                 commands = build_print_commands(img, self._profile)
                 await self._send_chunks(commands)
                 self._state = PrinterState.READY
+                self._last_error = None
                 return True
-            except Exception:
+            except Exception as exc:
+                self._last_error = str(exc) or "BLE write failed"
                 await self._cleanup_client()
                 self._state = PrinterState.DISCONNECTED
                 return False
@@ -290,8 +391,10 @@ class BLEPrinter:
             try:
                 await self._send_chunks(commands)
                 self._state = PrinterState.READY
+                self._last_error = None
                 return True
-            except Exception:
+            except Exception as exc:
+                self._last_error = str(exc) or "BLE write failed"
                 await self._cleanup_client()
                 self._state = PrinterState.DISCONNECTED
                 return False

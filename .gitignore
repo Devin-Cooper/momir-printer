@@ -2,7 +2,7 @@
 __pycache__/
 *.py[codz]
 *$py.class
-
+android-app/
 # C extensions
 *.so
 
@@ -209,3 +209,4 @@ __marimo__/
 # Debug output
 debug_*.png
 debug_*.bin
+momir-printer
