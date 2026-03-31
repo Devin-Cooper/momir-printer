@@ -1,5 +1,11 @@
 from PIL import Image
-from momir.ble_printer import pack_image_to_bytes, build_print_commands, PROFILE_M02S
+from momir.ble_printer import (
+    PROFILE_M02S,
+    PROFILE_M04S,
+    build_print_commands,
+    pack_image_to_bytes,
+    resolve_transfer_settings,
+)
 
 BYTES_PER_LINE = PROFILE_M02S.bytes_per_line  # 72
 
@@ -59,3 +65,36 @@ class TestBuildPrintCommands:
         img = Image.new("1", (576, 100), 0)
         commands = build_print_commands(img, PROFILE_M02S)
         assert len(commands) > 7200
+
+
+class TestResolveTransferSettings:
+
+    def test_m02s_uses_conservative_chunking(self):
+        settings = resolve_transfer_settings(
+            PROFILE_M02S,
+            mtu_size=247,
+            max_write_without_response_size=244,
+        )
+        assert settings.chunk_size == 205
+        assert settings.chunks_per_burst == 1
+        assert settings.burst_delay == 0.07
+        assert settings.inter_chunk_delay == 0.012
+
+    def test_m04s_keeps_profile_bursting(self):
+        settings = resolve_transfer_settings(
+            PROFILE_M04S,
+            mtu_size=247,
+            max_write_without_response_size=244,
+        )
+        assert settings.chunk_size == 205
+        assert settings.chunks_per_burst == PROFILE_M04S.chunks_per_burst
+        assert settings.burst_delay == PROFILE_M04S.burst_delay
+        assert settings.inter_chunk_delay == 0.008
+
+    def test_characteristic_limit_wins_when_smaller(self):
+        settings = resolve_transfer_settings(
+            PROFILE_M02S,
+            mtu_size=517,
+            max_write_without_response_size=128,
+        )
+        assert settings.chunk_size == 128
