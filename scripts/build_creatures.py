@@ -8,7 +8,7 @@ from pathlib import Path
 
 def build_creatures(input_path: str, output_path: str) -> dict:
     """Read AtomicCards.json, extract creatures, write minified JSON."""
-    with open(input_path) as f:
+    with open(input_path, encoding="utf-8-sig") as f:
         raw = json.load(f)
 
     creatures = defaultdict(list)
@@ -30,7 +30,7 @@ def build_creatures(input_path: str, output_path: str) -> dict:
     output = {str(mv): cards for mv, cards in sorted(creatures.items())}
 
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
-    with open(output_path, "w") as f:
+    with open(output_path, "w", encoding="utf-8") as f:
         json.dump(output, f, separators=(",", ":"), ensure_ascii=False)
 
     total = sum(len(v) for v in output.values())
