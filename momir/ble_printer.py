@@ -355,12 +355,11 @@ class BLEPrinter:
                 # Ensure 1-bit mode before any transforms
                 if img.mode != "1":
                     img = img.convert("1")
-                # For wide printers, rotate landscape and center
+                # For wide printers, rotate landscape and top-align
                 if self._profile.print_width > 576:
                     img = img.rotate(90, expand=True)
                     padded = Image.new("1", (self._profile.print_width, img.height), 1)
-                    offset_x = (self._profile.print_width - img.width) // 2
-                    padded.paste(img, (offset_x, 0))
+                    padded.paste(img, (0, 0))
                     img = padded
                 elif img.width != self._profile.print_width:
                     ratio = img.height / img.width

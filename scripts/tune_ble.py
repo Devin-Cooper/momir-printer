@@ -48,8 +48,7 @@ def generate_test_image(profile, pattern="card"):
         if profile.print_width > 576:
             img = img.rotate(90, expand=True)
             padded = Image.new("1", (profile.print_width, img.height), 1)
-            offset_x = (profile.print_width - img.width) // 2
-            padded.paste(img, (offset_x, 0))
+            padded.paste(img, (0, 0))
             return padded
         return img
     elif pattern == "black":
