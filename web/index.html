@@ -589,12 +589,40 @@ const SERVICE_UUID = '0000ff00-0000-1000-8000-00805f9b34fb';
 const WRITE_UUID = '0000ff02-0000-1000-8000-00805f9b34fb';
 const MAX_LINES_PER_BLOCK = 255;
 const POST_PRINT_DELAY = 2000;
+const CONSERVATIVE_INTER_CHUNK_DELAY = 12;
+const DEFAULT_INTER_CHUNK_DELAY = 8;
+const MIN_BLE_CHUNK_SIZE = 20;
+const BLE_DEBUG = (() => {
+  const fromStorage = localStorage.getItem('momirBleDebug');
+  const fromQuery = new URLSearchParams(window.location.search).get('bleDebug');
+  if (fromQuery !== null) return fromQuery === '1' || fromQuery === 'true';
+  return fromStorage === '1' || fromStorage === 'true';
+})();
+
+function bleDebug(message, details) {
+  if (!BLE_DEBUG) return;
+  const stamp = new Date().toISOString();
+  if (details === undefined) {
+    console.log(`[BLE ${stamp}] ${message}`);
+  } else {
+    console.log(`[BLE ${stamp}] ${message}`, details);
+  }
+}
+
+function describeBleError(e) {
+  if (!e) return { message: 'Unknown error' };
+  return {
+    name: e.name,
+    message: e.message,
+    stack: e.stack,
+  };
+}
 
 // Per-profile send parameters
 const SEND_PROFILES = {
-  M02:  { chunkSize: 512, chunksPerBurst: 1, burstDelay: 50 },
-  M02S: { chunkSize: 512, chunksPerBurst: 2, burstDelay: 50 },
-  M04S: { chunkSize: 205, chunksPerBurst: 3, burstDelay: 50 },
+  M02:  { chunkSize: 205, chunksPerBurst: 1, burstDelay: 70, interChunkDelay: CONSERVATIVE_INTER_CHUNK_DELAY },
+  M02S: { chunkSize: 205, chunksPerBurst: 1, burstDelay: 70, interChunkDelay: CONSERVATIVE_INTER_CHUNK_DELAY },
+  M04S: { chunkSize: 205, chunksPerBurst: 3, burstDelay: 50, interChunkDelay: DEFAULT_INTER_CHUNK_DELAY },
 };
 let activeSendProfile = SEND_PROFILES.M02S;
 
@@ -610,6 +638,7 @@ let bleCharacteristic = null;
 let useWriteWithoutResponse = true;
 let activeInitCmds = INIT_M02;
 let activeFinCmds = CMD_FIN_M02;
+let activeWriteMode = 'without-response';
 
 // Remove unused CMD_FEED reference
 function detectPrinterProfile(deviceName) {
@@ -666,10 +695,65 @@ function sleep(ms) {
 }
 
 function onGattDisconnected() {
+  bleDebug('gattserverdisconnected', {
+    deviceName: bleDevice?.name,
+    connected: !!bleDevice?.gatt?.connected,
+    state: printerState,
+  });
   printerState = 'disconnected';
   bleCharacteristic = null;
   updatePrinterUI();
   showMessage('Printer disconnected');
+}
+
+function supportsWriteWithoutResponse() {
+  return !!bleCharacteristic?.properties?.writeWithoutResponse && typeof bleCharacteristic.writeValueWithoutResponse === 'function';
+}
+
+function supportsWriteWithResponse() {
+  if (typeof bleCharacteristic?.writeValueWithResponse === 'function') return true;
+  return !!bleCharacteristic?.properties?.write;
+}
+
+async function writeChunk(chunk, preferredMode = activeWriteMode) {
+  const tryWithoutResponse = async () => {
+    await bleCharacteristic.writeValueWithoutResponse(chunk);
+    return 'without-response';
+  };
+
+  const tryWithResponse = async () => {
+    if (typeof bleCharacteristic.writeValueWithResponse === 'function') {
+      await bleCharacteristic.writeValueWithResponse(chunk);
+      return 'with-response';
+    }
+    await bleCharacteristic.writeValue(chunk);
+    return 'with-response';
+  };
+
+  if (preferredMode === 'without-response' && supportsWriteWithoutResponse()) {
+    try {
+      return await tryWithoutResponse();
+    } catch (e) {
+      const fallbackEligible = e?.name === 'NotSupportedError' || e?.name === 'NetworkError';
+      if (!fallbackEligible || !supportsWriteWithResponse()) {
+        throw e;
+      }
+      bleDebug('falling back to write-with-response', {
+        reason: describeBleError(e),
+      });
+      return await tryWithResponse();
+    }
+  }
+
+  if (supportsWriteWithResponse()) {
+    return await tryWithResponse();
+  }
+
+  if (supportsWriteWithoutResponse()) {
+    return await tryWithoutResponse();
+  }
+
+  throw new Error('No supported GATT write method available');
 }
 
 async function connectPrinter() {
@@ -681,6 +765,10 @@ async function connectPrinter() {
   updatePrinterUI();
 
   try {
+    bleDebug('requesting bluetooth device', {
+      filters: ['Mr.in_', 'M04', 'M02', 'T02'],
+      service: SERVICE_UUID,
+    });
     bleDevice = await navigator.bluetooth.requestDevice({
       filters: [
         { namePrefix: 'Mr.in_' },
@@ -697,16 +785,31 @@ async function connectPrinter() {
       bleDevice.addEventListener('gattserverdisconnected', onGattDisconnected);
     }
 
+    bleDebug('connecting gatt', {
+      deviceName: bleDevice.name,
+      deviceId: bleDevice.id,
+    });
     const server = await bleDevice.gatt.connect();
     const service = await server.getPrimaryService(SERVICE_UUID);
     bleCharacteristic = await service.getCharacteristic(WRITE_UUID);
     useWriteWithoutResponse = bleCharacteristic.properties.writeWithoutResponse;
+    activeWriteMode = useWriteWithoutResponse ? 'without-response' : 'with-response';
 
     const profileName = detectPrinterProfile(bleDevice.name);
+    bleDebug('connected and profile detected', {
+      profileName,
+      printWidth: activePrintWidth,
+      sendProfile: activeSendProfile,
+      characteristicProperties: bleCharacteristic.properties,
+      useWriteWithoutResponse,
+      activeWriteMode,
+      connected: !!bleDevice?.gatt?.connected,
+    });
     printerState = 'ready';
     updatePrinterUI();
     showMessage(`Connected to ${bleDevice.name} (${profileName}, ${activePrintWidth} dots)`);
   } catch (e) {
+    bleDebug('connect failed', describeBleError(e));
     printerState = 'disconnected';
     bleCharacteristic = null;
     updatePrinterUI();
@@ -716,19 +819,87 @@ async function connectPrinter() {
   }
 }
 
-async function sendData(data) {
-  const { chunkSize, chunksPerBurst, burstDelay } = activeSendProfile;
+async function sendDataWithConfig(data, config) {
+  const { chunkSize, chunksPerBurst, burstDelay, interChunkDelay = 0 } = config;
+  const totalChunks = Math.ceil(data.length / chunkSize);
+  bleDebug('starting transfer', {
+    totalBytes: data.length,
+    totalChunks,
+    chunkSize,
+    chunksPerBurst,
+    burstDelay,
+    interChunkDelay,
+    useWriteWithoutResponse,
+    connected: !!bleDevice?.gatt?.connected,
+  });
   let chunkCount = 0;
+  let modeUsedForTransfer = activeWriteMode;
   for (let i = 0; i < data.length; i += chunkSize) {
-    const chunk = data.slice(i, i + chunkSize);
-    if (useWriteWithoutResponse) {
-      await bleCharacteristic.writeValueWithoutResponse(chunk);
-    } else {
-      await bleCharacteristic.writeValue(chunk);
+    if (!bleCharacteristic || !bleDevice?.gatt?.connected) {
+      bleDebug('transfer aborted: disconnected mid-transfer', {
+        sentChunks: chunkCount,
+        totalChunks,
+      });
+      throw new Error('Printer disconnected during BLE transfer');
     }
+    const chunk = data.slice(i, i + chunkSize);
+    const modeUsed = await writeChunk(chunk);
+    activeWriteMode = modeUsed;
+    modeUsedForTransfer = modeUsed;
     chunkCount++;
-    if (chunkCount % chunksPerBurst === 0) {
+    if (BLE_DEBUG && (chunkCount === 1 || chunkCount % 25 === 0 || chunkCount === totalChunks)) {
+      bleDebug('chunk progress', {
+        chunk: chunkCount,
+        totalChunks,
+        modeUsed,
+      });
+    }
+
+    // For write-with-response, the browser already waits for an ACK on each write,
+    // so additional burst/inter-chunk sleeps only slow transfer unnecessarily.
+    const shouldPace = modeUsed !== 'with-response';
+    if (shouldPace && chunkCount % chunksPerBurst === 0) {
       await sleep(burstDelay);
+    }
+    if (shouldPace && interChunkDelay > 0) {
+      await sleep(interChunkDelay);
+    }
+  }
+  bleDebug('transfer completed', {
+    totalChunks,
+    totalBytes: data.length,
+    modeUsed: modeUsedForTransfer,
+  });
+}
+
+async function sendData(data) {
+  const attemptConfig = { ...activeSendProfile };
+  let attempt = 1;
+
+  while (attempt <= 2) {
+    try {
+      await sendDataWithConfig(data, attemptConfig);
+      return;
+    } catch (e) {
+      const retryable = (e?.name === 'NotSupportedError' || e?.name === 'NetworkError')
+        && attempt === 1
+        && attemptConfig.chunkSize > MIN_BLE_CHUNK_SIZE;
+      bleDebug('transfer attempt failed', {
+        attempt,
+        config: attemptConfig,
+        error: describeBleError(e),
+        retryable,
+      });
+      if (!retryable) throw e;
+      attemptConfig.chunkSize = Math.max(MIN_BLE_CHUNK_SIZE, Math.floor(attemptConfig.chunkSize / 2));
+      attemptConfig.chunksPerBurst = 1;
+      attemptConfig.burstDelay = Math.max(attemptConfig.burstDelay, 90);
+      attemptConfig.interChunkDelay = Math.max(attemptConfig.interChunkDelay || 0, 15);
+      attempt += 1;
+      bleDebug('retrying transfer with reduced chunk profile', {
+        attempt,
+        config: attemptConfig,
+      });
     }
   }
 }
@@ -736,6 +907,13 @@ async function sendData(data) {
 async function printCard() {
   if (!currentCard || !bleCharacteristic) return;
   if (printerState !== 'ready') return;
+
+  bleDebug('print requested', {
+    card: currentCard?.n,
+    profile: activeSendProfile,
+    printWidth: activePrintWidth,
+    connected: !!bleDevice?.gatt?.connected,
+  });
 
   printerState = 'printing';
   updatePrinterUI();
@@ -759,17 +937,35 @@ async function printCard() {
     const bytesPerLine = canvas.width / 8;
     const packed = canvasToPackedBytes(canvas);
     const commands = buildPrintCommands(packed, canvas.height, bytesPerLine, activeInitCmds, activeFinCmds);
+    bleDebug('render prepared', {
+      canvasWidth: canvas.width,
+      canvasHeight: canvas.height,
+      bytesPerLine,
+      packedBytes: packed.length,
+      commandBytes: commands.length,
+    });
     await sendData(commands);
     await sleep(POST_PRINT_DELAY);
 
     printerState = 'ready';
     updatePrinterUI();
     showMessage('Printed: ' + currentCard.n);
+    bleDebug('print completed', {
+      card: currentCard?.n,
+      connected: !!bleDevice?.gatt?.connected,
+    });
   } catch (e) {
+    bleDebug('print failed', {
+      error: describeBleError(e),
+      connected: !!bleDevice?.gatt?.connected,
+      profile: activeSendProfile,
+      card: currentCard?.n,
+    });
     printerState = 'disconnected';
     bleCharacteristic = null;
     updatePrinterUI();
-    showMessage('Print failed: ' + e.message);
+    const detail = e && e.message ? e.message : 'Unknown GATT error';
+    showMessage('Print failed: ' + detail + (BLE_DEBUG ? ' (check browser console)' : ''));
   }
 }
 
